@@ -1,19 +1,21 @@
 # CrowdSec Blocklist Import
 
-**Get premium-level threat protection for FREE.** This tool imports 60,000+ IPs from 28 public threat feeds directly into CrowdSec - no subscription required.
+**Get premium-level threat protection for FREE.** Import 60,000+ IPs from 28 public threat feeds directly into CrowdSec - no subscription required.
 
 ## Why Use This?
 
-| | CrowdSec Free | CrowdSec Pro ($50/mo) | **Free + This Tool** |
+| | CrowdSec Free | CrowdSec Pro | **Free + This Tool** |
 |---|:---:|:---:|:---:|
 | Community Intel (CAPI) | ~22k IPs | ~22k IPs | ~22k IPs |
 | Premium Blocklists | ❌ | ✅ | ✅ **60k+ IPs** |
 | Tor Exit Nodes | ❌ | ✅ | ✅ |
 | Scanner Blocking | ❌ | ✅ | ✅ |
 | All Your Bouncers | ✅ | ✅ | ✅ |
-| **Monthly Cost** | **$0** | **$50** | **$0** |
+| **Monthly Cost** | **$0** | **$50+** | **$0** |
 
-**How it works:** Import blocklists once into CrowdSec → All your bouncers (UniFi firewall, NPM, Cloudflare, WordPress, etc.) automatically enforce them. One import, network-wide protection.
+**How it works:** Import blocklists once into CrowdSec → All your bouncers automatically enforce them. One import, network-wide protection.
+
+> **Have a UniFi router?** Use our companion tool **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** to sync these bans directly to your router's firewall - block threats at the network edge!
 
 ## Features
 
@@ -29,7 +31,7 @@
 |--------|-------------|
 | IPsum (level 3+) | Aggregated threat intel (on 3+ blocklists) |
 | Spamhaus DROP/EDROP | Known hijacked/malicious netblocks |
-| Blocklist.de | IPs reported for various attacks (all/ssh/apache/mail) |
+| Blocklist.de | IPs reported for attacks (all/ssh/apache/mail) |
 | Firehol level1 + level2 | High confidence bad IPs |
 | Feodo Tracker | Banking trojan C2 servers |
 | SSL Blacklist | Malicious SSL certificate IPs |
@@ -46,9 +48,9 @@
 | myip.ms | Blacklist database |
 | GreenSnow | Attacker IPs |
 | StopForumSpam | Toxic spam IPs |
-| Tor exit nodes | Official Tor Project + dan.me.uk lists |
-| Shodan scanners | Known Shodan scanner IPs |
-| Censys scanners | Censys scanner IP ranges |
+| **Tor exit nodes** | Official Tor Project + dan.me.uk |
+| **Shodan scanners** | Known Shodan scanner IPs |
+| **Censys scanners** | Censys scanner IP ranges |
 
 ## Quick Start
 
@@ -122,8 +124,6 @@ docker run --rm \
 4. **Dedupe**: Queries CrowdSec for existing decisions to avoid duplicates
 5. **Import**: Bulk imports new IPs via `cscli decisions import`
 
-Decisions are tagged with `external_blocklist` reason for easy identification.
-
 ## Viewing Imported Decisions
 
 ```bash
@@ -139,7 +139,9 @@ docker exec crowdsec cscli decisions delete --all --reason external_blocklist
 
 ## Related Projects
 
-- [crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer) - Sync CrowdSec decisions to UniFi firewall groups
+| Project | Description |
+|---------|-------------|
+| **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Sync CrowdSec decisions to UniFi firewall groups |
 
 ## License
 
@@ -147,4 +149,4 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
