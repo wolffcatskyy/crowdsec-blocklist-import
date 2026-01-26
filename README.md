@@ -142,22 +142,44 @@ MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
 
 ## Security
 
-### Why Docker Socket Access?
+### Docker Socket Access
 
-This tool needs to run `cscli decisions import` inside your CrowdSec container. Docker mode uses `docker exec` which requires socket access.
+**The reality:** Docker socket access = root-equivalent access on the host. The `:ro` mount flag only prevents writing to the socket *file itself*, not API commands through it. Any container with socket access can run arbitrary containers, exec into others, etc.
 
-**Reality check:** Docker socket access = root-equivalent access. The `:ro` flag only prevents writing to the socket *file*, not API commands through it.
+**This is the same trust model as:** Portainer, Watchtower, Traefik, Nginx Proxy Manager, Dozzle, and dozens of other popular self-hosted tools that mount the Docker socket.
 
-**Why it's still reasonable:**
-- **150 lines of bash** - fully auditable in 5 minutes
-- **Runs once and exits** - not a persistent daemon
-- **Single purpose** - only runs `docker exec ... cscli decisions import`
-- **Open source** - inspect exactly what it does before running
+### Why Trust This Tool?
 
-**Alternatives if you're concerned:**
-1. **Direct mode**: Run `import.sh` on the host (no Docker needed)
-2. **Native CrowdSec**: If CrowdSec isn't containerized, direct mode works without any socket access
-3. **Coming soon**: Direct LAPI mode ([Issue #9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9)) will allow importing via HTTP API without Docker socket
+| Factor | This Tool |
+|--------|-----------|
+| **Code size** | ~200 lines of bash |
+| **Audit time** | 5-10 minutes to read entirely |
+| **Persistence** | Runs once and exits immediately |
+| **What it does** | Downloads text files, runs one `cscli` command |
+| **Source** | 100% open source, inspect before running |
+
+**The only Docker commands it runs:**
+```bash
+docker exec $CONTAINER cscli version          # Check CrowdSec exists
+docker exec $CONTAINER cscli decisions list   # Get existing IPs
+docker exec $CONTAINER cscli decisions import # Import new IPs
+```
+
+### Don't Want Socket Access?
+
+**Option 1: Native mode** (CrowdSec on host, not Docker)
+```bash
+curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/import.sh | bash
+```
+
+**Option 2: Run script directly on Docker host**
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+cd crowdsec-blocklist-import
+MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
+```
+
+**Option 3: Coming soon** - Direct LAPI mode ([Issue #9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9)) will import via HTTP API with zero Docker access
 
 ## How It Works
 
