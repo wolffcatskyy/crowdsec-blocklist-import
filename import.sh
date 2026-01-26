@@ -10,6 +10,10 @@ CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
 TEMP_DIR="/tmp/blocklist-import"
 
+# Telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
+TELEMETRY_ENABLED="${TELEMETRY_ENABLED:-true}"
+TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
+
 # Logging
 log() {
     local level="$1"
@@ -34,6 +38,19 @@ debug() { log "DEBUG" "$@"; }
 info()  { log "INFO" "$@"; }
 warn()  { log "WARN" "$@"; }
 error() { log "ERROR" "$@"; }
+
+# Send telemetry
+send_telemetry() {
+    local ip_count="$1"
+    if [ "$TELEMETRY_ENABLED" != "true" ]; then
+        return
+    fi
+    curl -s -X POST "$TELEMETRY_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"tool\":\"blocklist-import\",\"version\":\"$VERSION\",\"ip_count\":$ip_count}" \
+        --max-time 5 >/dev/null 2>&1 || true
+    debug "Telemetry sent"
+}
 
 # Check if we can access CrowdSec
 check_crowdsec() {
@@ -231,7 +248,7 @@ EOF
     # Extract valid IPv4 addresses
     cat *.txt 2>/dev/null | \
         grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | \
-        awk -F'.\ '{ 
+        awk -F'.' '{ 
             if ($1>=0 && $1<=255 && $2>=0 && $2<=255 && $3>=0 && $3<=255 && $4>=0 && $4<=255)
                 printf "%d.%d.%d.%d\n", $1, $2, $3, $4
         }' | \
@@ -264,6 +281,10 @@ EOF
         result=$(cat to_import.txt | docker exec -i "$CROWDSEC_CONTAINER" cscli decisions import -i - --format values --duration "$DECISION_DURATION" --reason "external_blocklist" 2>&1)
         info "Import result: $result"
     fi
+    
+    # Send telemetry with total IP count
+    total_ips=$(wc -l < filtered_private.txt)
+    send_telemetry "$total_ips"
     
     # Cleanup
     rm -rf "$TEMP_DIR"
