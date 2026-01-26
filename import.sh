@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -13,6 +13,10 @@ TEMP_DIR="/tmp/blocklist-import"
 # Telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
 TELEMETRY_ENABLED="${TELEMETRY_ENABLED:-true}"
 TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
+
+# Counters
+SOURCES_OK=0
+SOURCES_FAILED=0
 
 # Logging
 log() {
@@ -57,6 +61,7 @@ check_crowdsec() {
     if ! docker exec "$CROWDSEC_CONTAINER" cscli version &>/dev/null; then
         error "Cannot access CrowdSec container '$CROWDSEC_CONTAINER'"
         error "Make sure Docker socket is mounted and container name is correct"
+        error "Find your container name with: docker ps --format '{{.Names}}' | grep -i crowdsec"
         exit 1
     fi
     info "Connected to CrowdSec container '$CROWDSEC_CONTAINER'"
@@ -72,10 +77,17 @@ fetch_list() {
     debug "Fetching $name..."
     if curl -sL --max-time 60 "$url" 2>/dev/null | eval "$filter" > "$output"; then
         local count=$(wc -l < "$output" 2>/dev/null || echo 0)
-        debug "$name: $count entries"
+        if [ "$count" -gt 0 ]; then
+            debug "$name: $count entries"
+            ((SOURCES_OK++)) || true
+        else
+            debug "$name: empty response"
+            ((SOURCES_FAILED++)) || true
+        fi
     else
-        warn "Failed to fetch $name"
+        debug "$name: unavailable (will retry next run)"
         touch "$output"
+        ((SOURCES_FAILED++)) || true
     fi
 }
 
@@ -90,7 +102,7 @@ main() {
     cd "$TEMP_DIR"
     rm -f *.txt *.list 2>/dev/null || true
     
-    info "Fetching blocklists..."
+    info "Fetching from 28 blocklist sources..."
     
     # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
     fetch_list "IPsum" \
@@ -242,6 +254,9 @@ main() {
 74.120.14.0/24
 167.248.133.0/24
 EOF
+    ((SOURCES_OK++)) || true
+    
+    info "Sources: $SOURCES_OK successful, $SOURCES_FAILED unavailable (normal - public lists are sometimes down)"
     
     info "Combining and deduplicating..."
     
@@ -272,24 +287,23 @@ EOF
     comm -23 filtered_private.txt existing.txt > to_import.txt
     
     import_count=$(wc -l < to_import.txt)
-    info "IPs to import: $import_count (after deduplication)"
+    total_ips=$(wc -l < filtered_private.txt)
     
     if [[ $import_count -eq 0 ]]; then
-        info "No new IPs to import"
+        info "No new IPs to import (all $total_ips IPs already in CrowdSec)"
     else
-        info "Importing into CrowdSec..."
+        info "Importing $import_count new IPs into CrowdSec..."
         result=$(cat to_import.txt | docker exec -i "$CROWDSEC_CONTAINER" cscli decisions import -i - --format values --duration "$DECISION_DURATION" --reason "external_blocklist" 2>&1)
-        info "Import result: $result"
+        info "Import complete: $import_count IPs added (total coverage: $total_ips IPs)"
     fi
     
-    # Send telemetry with total IP count
-    total_ips=$(wc -l < filtered_private.txt)
+    # Send telemetry
     send_telemetry "$total_ips"
     
     # Cleanup
     rm -rf "$TEMP_DIR"
     
-    info "Import complete!"
+    info "Done!"
 }
 
 main "$@"
