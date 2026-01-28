@@ -8,16 +8,33 @@
 
 ## Why Use This?
 
-| | CrowdSec Free | CrowdSec Pro | **Free + This Tool** |
+| | CrowdSec Free | CrowdSec Premium | **Free + This Tool** |
 |---|:---:|:---:|:---:|
-| Community Intel (CAPI) | ~22k IPs | ~22k IPs | ~22k IPs |
+| Community Intel (CAPI) | ~15k IPs | 25k-100k+ IPs* | ~15k IPs |
 | Premium Blocklists | ❌ | ✅ | ✅ **60k+ IPs** |
 | Tor Exit Nodes | ❌ | ✅ | ✅ |
 | Scanner Blocking | ❌ | ✅ | ✅ |
 | All Your Bouncers | ✅ | ✅ | ✅ |
-| **Monthly Cost** | **$0** | **$50+** | **$0** |
+| **Monthly Cost** | **$0** | **$29+** | **$0** |
+
+*Premium IPs vary based on enabled blocklists and scenarios; lists refresh every 5 minutes.
 
 **How it works:** Import blocklists once into CrowdSec → All your bouncers automatically enforce them. One import, network-wide protection.
+
+### When to Use This vs Premium
+
+**This tool is ideal for:**
+- 🏠 Homelabs and personal projects
+- Learning and experimenting with threat intel
+- Maximum coverage without subscription costs
+
+**Consider CrowdSec Premium when:**
+- 🏢 Business/production environments needing SLA support
+- Concerns about false positives on VPN/proxy traffic
+- Need curated, lower-noise blocklists
+- Want the official 25k-100k+ threat feed with 5-minute updates
+
+> *More feeds isn't always better for every use case.* For businesses, you may need to be careful about false positives, VPN traffic, or noisy sources. This tool is perfect for homelabs; evaluate your threat model for production use.
 
 > **Have a UniFi router?** Use our companion tool **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** to sync these bans directly to your router's firewall - block threats at the network edge!
 
@@ -257,6 +274,13 @@ Before using this tool, you need:
 1. **CrowdSec running** in a Docker container (or natively for direct mode)
 2. **CrowdSec LAPI working** - verify with: `docker exec crowdsec cscli decisions list`
 3. **Docker socket access** for Docker mode (or `cscli` in PATH for direct mode)
+
+## Roadmap
+
+- [ ] **Per-feed enable/disable** ([#13](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/13)) - Control which feeds are imported via environment variables
+- [ ] **Direct LAPI mode** ([#10](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/10)) - Import via HTTP API without Docker socket
+- [ ] **Custom feed URLs** - Add your own blocklist sources
+- [ ] **Prometheus metrics** ([#6](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/6)) - Export import statistics
 
 ## Related Projects
 
