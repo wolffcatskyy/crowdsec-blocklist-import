@@ -135,11 +135,14 @@ cd crowdsec-blocklist-import
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `MODE` | `auto` | `auto`, `native`, or `docker` - how to access CrowdSec |
-| `CROWDSEC_CONTAINER` | `crowdsec` | Name of your CrowdSec container (Docker mode) |
+| `CROWDSEC_CONTAINER` | `crowdsec` | Name of your CrowdSec container (case-sensitive!) |
 | `DECISION_DURATION` | `24h` | How long decisions last (refresh daily) |
+| `FETCH_TIMEOUT` | `60` | Timeout in seconds for fetching blocklists (increase for slow connections) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARN, ERROR) |
 | `TZ` | `UTC` | Timezone for logs |
 | `TELEMETRY_ENABLED` | `true` | Anonymous usage stats (set false to disable) |
+
+> **Note:** Container names are case-sensitive! If your container is named `Crowdsec` (capital C), set `CROWDSEC_CONTAINER=Crowdsec`.
 
 ### Mode Selection
 

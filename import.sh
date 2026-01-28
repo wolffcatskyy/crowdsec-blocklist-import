@@ -4,11 +4,14 @@
 
 set -e
 
-VERSION="1.0.4"
+VERSION="1.0.5"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
 TEMP_DIR="/tmp/blocklist-import"
+
+# Fetch timeout in seconds (increase for slow connections)
+FETCH_TIMEOUT="${FETCH_TIMEOUT:-60}"
 
 # Mode: "docker" or "native" (auto-detected if not set)
 MODE="${MODE:-auto}"
@@ -83,12 +86,22 @@ find_crowdsec_container() {
 
     # First, check if Docker is accessible
     if ! docker ps &>/dev/null; then
+        error "Cannot access Docker. Ensure Docker socket is mounted (-v /var/run/docker.sock:/var/run/docker.sock:ro)"
         return 1
     fi
 
-    # Try the specified container first
+    # Try the specified container first (exact match)
     if docker exec "$specified" cscli version &>/dev/null; then
         echo "$specified"
+        return 0
+    fi
+
+    # Try case-insensitive match of specified name
+    local case_match=$(docker ps --format '{{.Names}}' | grep -i "^${specified}$" 2>/dev/null | head -1)
+    if [ -n "$case_match" ] && docker exec "$case_match" cscli version &>/dev/null; then
+        warn "Found container '$case_match' (note: container names are case-sensitive)"
+        warn "Set CROWDSEC_CONTAINER=$case_match for exact match"
+        echo "$case_match"
         return 0
     fi
 
@@ -196,7 +209,7 @@ fetch_list() {
     local filter="${4:-cat}"
 
     debug "Fetching $name..."
-    if curl -sL --max-time 60 "$url" 2>/dev/null | eval "$filter" > "$output"; then
+    if curl -sL --max-time "$FETCH_TIMEOUT" "$url" 2>/dev/null | eval "$filter" > "$output"; then
         local count=$(wc -l < "$output" 2>/dev/null || echo 0)
         if [ "$count" -gt 0 ]; then
             debug "$name: $count entries"
