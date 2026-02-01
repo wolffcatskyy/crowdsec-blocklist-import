@@ -45,6 +45,11 @@
 - **Private IP Filtering**: Automatically excludes RFC1918 and reserved ranges
 - **Docker Ready**: Run as a container with Docker socket access
 - **Cron Friendly**: Designed for daily runs with 24h decision expiration
+- **Selective Sources** *(v1.1.0)*: Enable/disable individual blocklists via `ENABLE_<SOURCE>` env vars
+- **Custom Blocklist URLs** *(v1.1.0)*: Import your own threat feeds via `CUSTOM_BLOCKLISTS`
+- **Dry Run Mode** *(v1.1.0)*: Preview imports without making changes (`DRY_RUN=true`)
+- **Per-Source Statistics** *(v1.1.0)*: Summary table showing IP counts from each source
+- **Docker API Compatibility** *(v1.1.0)*: `DOCKER_API_VERSION` override for CLI/Engine version mismatches
 
 ## Included Blocklists
 
@@ -88,6 +93,7 @@ services:
     environment:
       - CROWDSEC_CONTAINER=crowdsec
       - DECISION_DURATION=24h
+      - DRY_RUN=false
       - TZ=America/New_York
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -141,6 +147,10 @@ cd crowdsec-blocklist-import
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARN, ERROR) |
 | `TZ` | `UTC` | Timezone for logs |
 | `TELEMETRY_ENABLED` | `true` | Anonymous usage stats (set false to disable) |
+| `DRY_RUN` | `false` | Preview mode - shows what would be imported without making changes |
+| `ENABLE_<SOURCE>` | `true` | Disable individual sources: `ENABLE_IPSUM=false`, `ENABLE_TOR_EXIT_NODES=false`, etc. |
+| `CUSTOM_BLOCKLISTS` | _(empty)_ | Comma-separated URLs of additional blocklists to import |
+| `DOCKER_API_VERSION` | _(auto)_ | Override Docker API version (set `1.43` for Docker CLI 24 + Engine 25+) |
 
 > **Note:** Container names are case-sensitive! If your container is named `Crowdsec` (capital C), set `CROWDSEC_CONTAINER=Crowdsec`.
 
@@ -160,6 +170,29 @@ MODE=native ./import.sh
 MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
 ```
 
+### Selective Blocklists (v1.1.0)
+
+Control which sources are imported using `ENABLE_<SOURCE>` environment variables:
+
+```bash
+# Disable specific sources
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e CROWDSEC_CONTAINER=crowdsec \
+  -e ENABLE_TOR_EXIT_NODES=false \
+  -e ENABLE_TOR_DAN_ME_UK=false \
+  -e ENABLE_STOPFORUMSPAM=false \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+```
+
+Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPAMHAUS_DROP`, `Blocklist.de all` → `ENABLE_BLOCKLIST_DE_ALL`, `Tor (dan.me.uk)` → `ENABLE_TOR_DAN_ME_UK`
+
+### Custom Blocklists (v1.1.0)
+
+```bash
+-e CUSTOM_BLOCKLISTS="https://example.com/my-blocklist.txt,https://example.com/another.txt"
+```
+
 ## Security
 
 ### Docker Socket Access
@@ -171,9 +204,9 @@ MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
 ### Why Trust This Tool?
 
 | Factor | This Tool |
-|--------|-----------|
-| **Code size** | ~200 lines of bash |
-| **Audit time** | 5-10 minutes to read entirely |
+|--------|-----------| 
+| **Code size** | ~600 lines of bash |
+| **Audit time** | 15-20 minutes to read entirely |
 | **Persistence** | Runs once and exits immediately |
 | **What it does** | Downloads text files, runs one `cscli` command |
 | **Source** | 100% open source, inspect before running |
@@ -258,6 +291,12 @@ Make sure you have `-v /var/run/docker.sock:/var/run/docker.sock:ro` in your doc
 **3. Different Docker host**
 This tool must run on the same Docker host as CrowdSec. It cannot connect to remote Docker daemons.
 
+**4. Docker API version mismatch** *(v1.1.0 fix)*
+If you see errors like `Error response from daemon: client version X.XX is too new`, set:
+```bash
+-e DOCKER_API_VERSION=1.43
+```
+
 ### "No new IPs to import"
 
 This means all IPs from the blocklists are already in your CrowdSec decisions (from CAPI, console lists, or previous imports). This is normal on subsequent runs.
@@ -266,7 +305,7 @@ This means all IPs from the blocklists are already in your CrowdSec decisions (f
 
 Some blocklists may be temporarily unavailable. The script will show:
 ```
-Sources: 25 successful, 3 unavailable (normal - public lists are sometimes down)
+Sources: 25 successful, 3 unavailable, 0 disabled
 ```
 
 This is expected - public lists occasionally go offline. The script continues with available sources and will retry unavailable ones on the next run.
@@ -280,9 +319,11 @@ Before using this tool, you need:
 
 ## Roadmap
 
-- [ ] **Per-feed enable/disable** ([#13](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/13)) - Control which feeds are imported via environment variables
-- [ ] **Direct LAPI mode** ([#10](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/10)) - Import via HTTP API without Docker socket
-- [ ] **Custom feed URLs** - Add your own blocklist sources
+- [x] **Per-feed enable/disable** (v1.1.0) - `ENABLE_<SOURCE>` env vars
+- [x] **Custom feed URLs** (v1.1.0) - `CUSTOM_BLOCKLISTS` env var
+- [x] **Dry run mode** (v1.1.0) - `DRY_RUN=true`
+- [x] **Per-source statistics** (v1.1.0) - Summary table after each run
+- [ ] **Direct LAPI mode** ([#9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9)) - Import via HTTP API without Docker socket
 - [ ] **Prometheus metrics** ([#6](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/6)) - Export import statistics
 
 ## Related Projects
