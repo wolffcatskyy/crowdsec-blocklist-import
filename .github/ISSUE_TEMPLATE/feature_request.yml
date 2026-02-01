@@ -1,0 +1,108 @@
+name: "AI-Ready Feature Request"
+description: "Request a feature with enough context for AI-assisted implementation"
+title: "[Feature]: "
+labels: ["enhancement", "ai-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## AI-Ready Feature Request
+        Please fill out this form with as much detail as possible. The structured format helps both human contributors and AI assistants understand and implement the feature effectively.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One sentence describing the desired feature.
+      placeholder: "e.g., Add support for importing blocklists from local files in addition to URLs."
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Context on why this matters. What problem does it solve?
+      placeholder: "Explain the use case and the value this feature provides."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed Behavior
+      description: Describe how the feature should work from the user's perspective.
+      placeholder: "Walk through how a user would interact with this feature once implemented."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature?
+      options:
+        - "High - Core functionality gap or widely requested"
+        - "Medium - Useful improvement for many users"
+        - "Low - Nice to have, minor enhancement"
+    validations:
+      required: true
+
+  - type: textarea
+    id: where-in-code
+    attributes:
+      label: Where in the Code
+      description: File, class, method, or section where this should be implemented.
+      placeholder: "e.g., src/importer.py — new method in BlocklistImporter class, config.py for new env vars"
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Specific, testable requirements for the implementation.
+      value: |
+        - [ ] 
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Limitations and compatibility requirements.
+      placeholder: |
+        - Must not break: ...
+        - Must be configurable via: ...
+        - Must degrade gracefully if: ...
+        - No new dependencies unless: ...
+
+  - type: textarea
+    id: design-notes
+    attributes:
+      label: Design Notes (optional)
+      description: Any thoughts on implementation approach, API design, data structures, etc.
+      placeholder: "Share any architectural or design considerations."
+
+  - type: textarea
+    id: ai-prompt
+    attributes:
+      label: AI Prompt Template (optional)
+      description: A starting prompt contributors can paste into their AI assistant.
+      render: markdown
+      value: |
+        I'm adding a feature to crowdsec-blocklist-import. Here's the context:
+
+        [Paste the project's AI context block from CONTRIBUTING.md]
+
+        The feature request is: [paste this issue]
+
+        The relevant code is:
+        [paste the file/function mentioned in "Where in the Code"]
+
+        Please implement this feature while:
+        - Following the project's existing patterns
+        - Adding appropriate error handling
+        - Making it configurable via environment variable with a sensible default
+        - Ensuring graceful degradation if not configured
