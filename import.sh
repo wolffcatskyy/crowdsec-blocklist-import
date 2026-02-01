@@ -1,10 +1,13 @@
 #!/bin/bash
 # CrowdSec Blocklist Import
 # Imports 28+ public threat feeds directly into CrowdSec
+#
+# v1.1.0 - Selective blocklists, custom URLs, dry-run mode, per-source stats
+#           Fixes: MODE case sensitivity (#12), DOCKER_API_VERSION support (#12)
 
 set -e
 
-VERSION="1.0.5"
+VERSION="1.1.0"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -14,7 +17,18 @@ TEMP_DIR="/tmp/blocklist-import"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-60}"
 
 # Mode: "docker" or "native" (auto-detected if not set)
-MODE="${MODE:-auto}"
+# Accept both MODE and mode env vars (fixes #12)
+MODE="${MODE:-${mode:-auto}}"
+
+# Docker API version override (fixes #12 - Docker CLI 24 vs Engine 25+ mismatch)
+# Set DOCKER_API_VERSION=1.43 (or appropriate version) if you get API version errors
+[ -n "$DOCKER_API_VERSION" ] && export DOCKER_API_VERSION
+
+# Dry-run mode: show what would be imported without making changes (closes #3)
+DRY_RUN="${DRY_RUN:-false}"
+
+# Custom blocklist URLs, comma-separated (closes #2)
+CUSTOM_BLOCKLISTS="${CUSTOM_BLOCKLISTS:-}"
 
 # Telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
 TELEMETRY_ENABLED="${TELEMETRY_ENABLED:-true}"
@@ -23,6 +37,7 @@ TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
 # Counters
 SOURCES_OK=0
 SOURCES_FAILED=0
+SOURCES_SKIPPED=0
 
 # Logging
 log() {
@@ -48,6 +63,103 @@ debug() { log "DEBUG" "$@"; }
 info()  { log "INFO" "$@"; }
 warn()  { log "WARN" "$@"; }
 error() { log "ERROR" "$@"; }
+
+# Normalize a source name to an env var name (closes #1)
+# "IPsum" -> "IPSUM", "Spamhaus DROP" -> "SPAMHAUS_DROP", "Blocklist.de all" -> "BLOCKLIST_DE_ALL"
+# "Tor (dan.me.uk)" -> "TOR_DAN_ME_UK", "myip.ms" -> "MYIP_MS"
+normalize_source_name() {
+    local name="$1"
+    echo "$name" | tr '[:lower:]' '[:upper:]' | sed 's/[[:space:]\.()-]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//'
+}
+
+# Check if a blocklist source is enabled via ENABLE_<NAME> env var (closes #1)
+# Default: all sources enabled (true)
+is_source_enabled() {
+    local name="$1"
+    local var_name="ENABLE_$(normalize_source_name "$name")"
+    local value="${!var_name:-true}"
+    [ "$value" = "true" ]
+}
+
+# Record per-source statistics (closes #4)
+record_stat() {
+    local name="$1"
+    local count="$2"
+    echo "${name}|${count}" >> "$TEMP_DIR/.stats"
+}
+
+# Display per-source statistics summary table (closes #4)
+show_stats() {
+    local stats_file="$TEMP_DIR/.stats"
+    if [ ! -f "$stats_file" ] || [ ! -s "$stats_file" ]; then
+        return
+    fi
+
+    info "--- Source Statistics ---"
+    printf "  %-30s %s\n" "Source" "IPs" | while read -r line; do info "$line"; done
+    printf "  %-30s %s\n" "------------------------------" "--------" | while read -r line; do info "$line"; done
+
+    local total=0
+    while IFS='|' read -r source count; do
+        printf "  %-30s %s\n" "$source" "$count" | while read -r line; do info "$line"; done
+        total=$((total + count))
+    done < "$stats_file"
+
+    printf "  %-30s %s\n" "------------------------------" "--------" | while read -r line; do info "$line"; done
+    printf "  %-30s %s\n" "TOTAL (before dedup)" "$total" | while read -r line; do info "$line"; done
+    info "------------------------"
+}
+
+# Log disabled sources at startup (closes #1)
+show_source_overrides() {
+    local has_overrides=false
+    local all_sources=(
+        "IPsum"
+        "Spamhaus DROP"
+        "Spamhaus EDROP"
+        "Blocklist.de all"
+        "Blocklist.de SSH"
+        "Blocklist.de Apache"
+        "Blocklist.de mail"
+        "Firehol level1"
+        "Firehol level2"
+        "Feodo Tracker"
+        "SSL Blacklist"
+        "URLhaus"
+        "Emerging Threats"
+        "Binary Defense"
+        "Bruteforce Blocker"
+        "DShield"
+        "CI Army"
+        "Darklist"
+        "Talos"
+        "Charles Haley"
+        "Botvrij"
+        "myip.ms"
+        "GreenSnow"
+        "StopForumSpam"
+        "Tor exit nodes"
+        "Tor (dan.me.uk)"
+        "Shodan scanners"
+        "Censys"
+    )
+
+    for source in "${all_sources[@]}"; do
+        local var_name="ENABLE_$(normalize_source_name "$source")"
+        local value="${!var_name:-}"
+        if [ "$value" = "false" ]; then
+            if [ "$has_overrides" = false ]; then
+                info "Source overrides:"
+                has_overrides=true
+            fi
+            info "  $var_name=false (disabled)"
+        fi
+    done
+
+    if [ "$has_overrides" = true ]; then
+        info ""
+    fi
+}
 
 # Send telemetry
 send_telemetry() {
@@ -201,12 +313,21 @@ show_docker_help() {
     fi
 }
 
-# Fetch a blocklist
+# Fetch a blocklist (with source-enable check and per-source stats)
 fetch_list() {
     local name="$1"
     local url="$2"
     local output="$3"
     local filter="${4:-cat}"
+
+    # Check if this source is enabled (closes #1)
+    if ! is_source_enabled "$name"; then
+        debug "$name: SKIPPED (disabled via ENABLE_$(normalize_source_name "$name")=false)"
+        touch "$output"
+        ((SOURCES_SKIPPED++)) || true
+        record_stat "$name (disabled)" 0
+        return
+    fi
 
     debug "Fetching $name..."
     if curl -sL --max-time "$FETCH_TIMEOUT" "$url" 2>/dev/null | eval "$filter" > "$output"; then
@@ -214,29 +335,45 @@ fetch_list() {
         if [ "$count" -gt 0 ]; then
             debug "$name: $count entries"
             ((SOURCES_OK++)) || true
+            record_stat "$name" "$count"
         else
             debug "$name: empty response"
             ((SOURCES_FAILED++)) || true
+            record_stat "$name" 0
         fi
     else
         debug "$name: unavailable (will retry next run)"
         touch "$output"
         ((SOURCES_FAILED++)) || true
+        record_stat "$name" 0
     fi
 }
 
 # Main import logic
 main() {
+    info "========================================="
     info "CrowdSec Blocklist Import v$VERSION"
+    info "========================================="
     info "Decision duration: $DECISION_DURATION"
+    [ "$DRY_RUN" = "true" ] && info "DRY RUN MODE - no changes will be made"
+    [ -n "$CUSTOM_BLOCKLISTS" ] && info "Custom blocklists: configured"
+    [ -n "$DOCKER_API_VERSION" ] && info "Docker API version: $DOCKER_API_VERSION"
+
+    # Show any disabled source overrides
+    show_source_overrides
 
     setup_crowdsec
 
     mkdir -p "$TEMP_DIR"
     cd "$TEMP_DIR"
-    rm -f *.txt *.list 2>/dev/null || true
+    rm -f *.txt *.list .stats 2>/dev/null || true
 
-    info "Fetching from 28 blocklist sources..."
+    # Initialize stats file
+    touch "$TEMP_DIR/.stats"
+
+    # Count enabled built-in sources
+    local total_builtin=28
+    info "Fetching blocklist sources (${total_builtin} built-in)..."
 
     # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
     fetch_list "IPsum" \
@@ -382,15 +519,43 @@ main() {
         "grep -v '^#'"
 
     # Censys (static list)
-    cat << EOF > censys.txt
+    if is_source_enabled "Censys"; then
+        cat << EOF > censys.txt
 192.35.168.0/23
 162.142.125.0/24
 74.120.14.0/24
 167.248.133.0/24
 EOF
-    ((SOURCES_OK++)) || true
+        ((SOURCES_OK++)) || true
+        record_stat "Censys" 4
+    else
+        touch censys.txt
+        debug "Censys: SKIPPED (disabled via ENABLE_CENSYS=false)"
+        ((SOURCES_SKIPPED++)) || true
+        record_stat "Censys (disabled)" 0
+    fi
 
-    info "Sources: $SOURCES_OK successful, $SOURCES_FAILED unavailable (normal - public lists are sometimes down)"
+    # Custom blocklists (closes #2)
+    if [ -n "$CUSTOM_BLOCKLISTS" ]; then
+        local custom_num=0
+        IFS=',' read -ra CUSTOM_URLS <<< "$CUSTOM_BLOCKLISTS"
+        for custom_url in "${CUSTOM_URLS[@]}"; do
+            # Trim whitespace
+            custom_url=$(echo "$custom_url" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$custom_url" ] && continue
+            ((custom_num++)) || true
+            fetch_list "Custom #${custom_num}" \
+                "$custom_url" \
+                "custom_${custom_num}.txt" \
+                "grep -v '^#'"
+        done
+        info "Processed $custom_num custom blocklist(s)"
+    fi
+
+    info "Sources: $SOURCES_OK successful, $SOURCES_FAILED unavailable, $SOURCES_SKIPPED disabled"
+
+    # Show per-source statistics (closes #4)
+    show_stats
 
     info "Combining and deduplicating..."
 
@@ -408,14 +573,19 @@ EOF
     grep -vE "^(1\.0\.0\.1|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9|208\.67\.(222|220)\.(222|220))$" > filtered_private.txt
 
     # Get existing decisions to avoid duplicates
-    info "Checking existing CrowdSec decisions..."
-    run_cscli decisions list 2>/dev/null | \
-        awk -F'|' '{print $4}' | \
-        grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | \
-        sort -u > existing.txt || touch existing.txt
+    if [ "$DRY_RUN" = "true" ]; then
+        info "[DRY RUN] Skipping existing decisions check"
+        touch existing.txt
+    else
+        info "Checking existing CrowdSec decisions..."
+        run_cscli decisions list 2>/dev/null | \
+            awk -F'|' '{print $4}' | \
+            grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | \
+            sort -u > existing.txt || touch existing.txt
 
-    existing_count=$(wc -l < existing.txt)
-    debug "Found $existing_count existing decisions"
+        existing_count=$(wc -l < existing.txt)
+        debug "Found $existing_count existing decisions"
+    fi
 
     # Remove already-imported IPs
     comm -23 filtered_private.txt existing.txt > to_import.txt
@@ -425,6 +595,11 @@ EOF
 
     if [[ $import_count -eq 0 ]]; then
         info "No new IPs to import (all $total_ips IPs already in CrowdSec)"
+    elif [ "$DRY_RUN" = "true" ]; then
+        # Dry-run mode (closes #3)
+        info "[DRY RUN] Would import $import_count new IPs into CrowdSec (total coverage: $total_ips IPs)"
+        info "[DRY RUN] Decision duration would be: $DECISION_DURATION"
+        info "[DRY RUN] No changes were made"
     else
         info "Importing $import_count new IPs into CrowdSec..."
         result=$(cat to_import.txt | run_cscli_stdin decisions import -i - --format values --duration "$DECISION_DURATION" --reason "external_blocklist" 2>&1)
