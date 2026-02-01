@@ -69,28 +69,28 @@ No codebase knowledge required. No onboarding docs to read. Just pick an issue a
 
 | Source | Description |
 |--------|-------------|
-| IPsum (level 3+) | Aggregated threat intel (on 3+ blocklists) |
-| Spamhaus DROP/EDROP | Known hijacked/malicious netblocks |
-| Blocklist.de | IPs reported for attacks (all/ssh/apache/mail) |
-| Firehol level1 + level2 | High confidence bad IPs |
-| Feodo Tracker | Banking trojan C2 servers |
-| SSL Blacklist | Malicious SSL certificate IPs |
-| Emerging Threats | Compromised IPs |
-| Binary Defense | Ban list |
-| Bruteforce Blocker | SSH/FTP brute force sources |
-| DShield | SANS Internet Storm Center top attackers |
-| CI Army | Cinsscore bad reputation |
-| Darklist | SSH brute force |
-| URLhaus | Malware distribution IPs |
-| Talos Intelligence | Cisco threat intel |
-| Charles Haley | SSH dictionary attacks |
-| Botvrij | Botnet C2 IPs |
-| myip.ms | Blacklist database |
-| GreenSnow | Attacker IPs |
-| StopForumSpam | Toxic spam IPs |
-| **Tor exit nodes** | Official Tor Project + dan.me.uk |
+| [IPsum](https://github.com/stamparm/ipsum) (level 3+) | Aggregated threat intel (on 3+ blocklists) |
+| [Spamhaus](https://www.spamhaus.org/drop/) DROP/EDROP | Known hijacked/malicious netblocks |
+| [Blocklist.de](https://www.blocklist.de/) | IPs reported for attacks (all/ssh/apache/mail) |
+| [Firehol](https://github.com/firehol/blocklist-ipsets) level1 + level2 | High confidence bad IPs |
+| [Feodo Tracker](https://feodotracker.abuse.ch/) | Banking trojan C2 servers |
+| [SSL Blacklist](https://sslbl.abuse.ch/) | Malicious SSL certificate IPs |
+| [Emerging Threats](https://rules.emergingthreats.net/) | Compromised IPs |
+| [Binary Defense](https://www.binarydefense.com/) | Ban list |
+| [Bruteforce Blocker](https://danger.rulez.sk/projects/bruteforceblocker/) | SSH/FTP brute force sources |
+| [DShield](https://www.dshield.org/) | SANS Internet Storm Center top attackers |
+| [CI Army](https://cinsscore.com/) | Cinsscore bad reputation |
+| [Darklist](https://www.darklist.de/) | SSH brute force |
+| [URLhaus](https://urlhaus.abuse.ch/) | Malware distribution IPs |
+| [Talos Intelligence](https://www.talosintelligence.com/) | Cisco threat intel |
+| [Charles Haley](https://charles.the-haleys.org/) | SSH dictionary attacks |
+| [Botvrij](https://www.botvrij.eu/) | Botnet C2 IPs |
+| [myip.ms](https://myip.ms/) | Blacklist database |
+| [GreenSnow](https://blocklist.greensnow.co/) | Attacker IPs |
+| [StopForumSpam](https://www.stopforumspam.com/) | Toxic spam IPs |
+| [Tor Project](https://check.torproject.org/) + [dan.me.uk](https://www.dan.me.uk/torlist/) | Tor exit nodes |
 | **Shodan scanners** | Known Shodan scanner IPs |
-| **Censys scanners** | Censys scanner IP ranges |
+| [Censys](https://censys.io/) scanners | Censys scanner IP ranges |
 
 ## Quick Start
 
