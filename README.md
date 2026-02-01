@@ -6,6 +6,20 @@
 
 **Get premium-level threat protection for FREE.** Import 60,000+ IPs from 28 public threat feeds directly into CrowdSec - no subscription required.
 
+---
+
+### We've Reinvented Contributing
+
+Every issue in this repo is **AI-Ready** — structured with full context, file paths, implementation guides, acceptance criteria, and a ready-to-use AI prompt at the bottom.
+
+**Pick an issue. Copy the prompt. Paste into your AI tool. Submit a PR.**
+
+No codebase knowledge required. No onboarding docs to read. Just pick an issue and go.
+
+[**Browse AI-Ready Issues →**](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues?q=is%3Aopen+label%3Aai-ready)
+
+---
+
 ## Why Use This?
 
 | | CrowdSec Free | CrowdSec Premium | **Free + This Tool** |
@@ -204,7 +218,7 @@ Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPA
 ### Why Trust This Tool?
 
 | Factor | This Tool |
-|--------|-----------| 
+|--------|-----------|
 | **Code size** | ~600 lines of bash |
 | **Audit time** | 15-20 minutes to read entirely |
 | **Persistence** | Runs once and exits immediately |
@@ -331,11 +345,8 @@ Before using this tool, you need:
 | Project | Description |
 |---------|-------------|
 | **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Sync CrowdSec decisions to UniFi firewall groups |
+| **[emby-playback-guardian](https://github.com/wolffcatskyy/emby-playback-guardian)** | Protect Emby/Jellyfin playback by pausing tasks during streaming |
 
 ## License
 
 MIT License - see [LICENSE](LICENSE)
-
-## Contributing
-
-Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
