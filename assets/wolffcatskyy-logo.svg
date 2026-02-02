@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f0f23;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#1a1a3e;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#6366f1;stop-opacity:1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="250" fill="url(#bg)" stroke="url(#accent)" stroke-width="4"/>
+
+  <!-- Wolf ears (left) -->
+  <polygon points="138,120 158,200 118,195" fill="url(#accent)" opacity="0.9"/>
+  <polygon points="142,130 155,193 125,189" fill="#a78bfa" opacity="0.3"/>
+
+  <!-- Wolf ears (right) -->
+  <polygon points="374,120 354,200 394,195" fill="url(#accent)" opacity="0.9"/>
+  <polygon points="370,130 357,193 387,189" fill="#a78bfa" opacity="0.3"/>
+
+  <!-- Head shape - wolf/cat hybrid -->
+  <ellipse cx="256" cy="260" rx="120" ry="130" fill="#1e1e3f" stroke="url(#glow)" stroke-width="2"/>
+
+  <!-- Inner face -->
+  <ellipse cx="256" cy="270" rx="100" ry="110" fill="#252550"/>
+
+  <!-- Eyes - cybernetic/tech style -->
+  <!-- Left eye -->
+  <ellipse cx="216" cy="240" rx="28" ry="22" fill="#0f0f23" stroke="url(#accent)" stroke-width="2"/>
+  <ellipse cx="216" cy="240" rx="14" ry="14" fill="url(#accent)"/>
+  <circle cx="216" cy="240" r="7" fill="#a78bfa"/>
+  <circle cx="210" cy="235" r="3" fill="white" opacity="0.8"/>
+
+  <!-- Right eye -->
+  <ellipse cx="296" cy="240" rx="28" ry="22" fill="#0f0f23" stroke="url(#accent)" stroke-width="2"/>
+  <ellipse cx="296" cy="240" rx="14" ry="14" fill="url(#accent)"/>
+  <circle cx="296" cy="240" r="7" fill="#a78bfa"/>
+  <circle cx="290" cy="235" r="3" fill="white" opacity="0.8"/>
+
+  <!-- Nose -->
+  <polygon points="256,280 245,295 267,295" fill="#6366f1" rx="3"/>
+  <ellipse cx="256" cy="293" rx="12" ry="8" fill="#6366f1"/>
+
+  <!-- Mouth/whisker area -->
+  <path d="M240,305 Q256,320 272,305" stroke="#4a4a7a" stroke-width="2" fill="none"/>
+
+  <!-- Whiskers left -->
+  <line x1="155" y1="278" x2="225" y2="290" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+  <line x1="158" y1="295" x2="225" y2="298" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+  <line x1="162" y1="312" x2="228" y2="306" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- Whiskers right -->
+  <line x1="357" y1="278" x2="287" y2="290" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+  <line x1="354" y1="295" x2="287" y2="298" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+  <line x1="350" y1="312" x2="284" y2="306" stroke="#6366f1" stroke-width="1.5" opacity="0.5"/>
+
+  <!-- Circuit/tech lines on forehead -->
+  <path d="M220,195 L256,185 L292,195" stroke="#6366f1" stroke-width="1.5" fill="none" opacity="0.6"/>
+  <path d="M230,205 L256,198 L282,205" stroke="#8b5cf6" stroke-width="1" fill="none" opacity="0.4"/>
+  <circle cx="256" cy="185" r="3" fill="#a78bfa" opacity="0.8"/>
+
+  <!-- MCP node dots -->
+  <circle cx="220" cy="195" r="2.5" fill="#6366f1" opacity="0.7"/>
+  <circle cx="292" cy="195" r="2.5" fill="#6366f1" opacity="0.7"/>
+
+  <!-- Bottom text area -->
+  <text x="256" y="420" text-anchor="middle" fill="#a78bfa" font-family="monospace" font-size="28" font-weight="bold" letter-spacing="3">WOLFFCATSKYY</text>
+  <text x="256" y="445" text-anchor="middle" fill="#6366f1" font-family="monospace" font-size="14" letter-spacing="2">HOMEOPS</text>
+</svg>
