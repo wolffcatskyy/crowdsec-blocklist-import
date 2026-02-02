@@ -3,7 +3,10 @@
 # Imports 28+ public threat feeds directly into CrowdSec
 #
 # v1.1.0 - Selective blocklists, custom URLs, dry-run mode, per-source stats
-#           Fixes: MODE case sensitivity (#12), DOCKER_API_VERSION support (#12)
+#           Fixes: MODE case sensitivity (#12), DOCKER_API_VERSION auto-detect (#12)
+#           Curl-based Docker socket fallback (#12)
+#           --version, --help, --list-sources, --dry-run flags (#13)
+#           ENABLE_* env var validation (#14)
 
 set -e
 
@@ -17,12 +20,13 @@ TEMP_DIR="/tmp/blocklist-import"
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-60}"
 
 # Mode: "docker" or "native" (auto-detected if not set)
-# Accept both MODE and mode env vars (fixes #12)
-MODE="${MODE:-${mode:-auto}}"
+# Accept both MODE and mode env vars, case-insensitive (fixes #12)
+_raw_mode="${MODE:-${mode:-auto}}"
+MODE="$(echo "$_raw_mode" | tr '[:upper:]' '[:lower:]')"
 
 # Docker API version override (fixes #12 - Docker CLI 24 vs Engine 25+ mismatch)
-# Set DOCKER_API_VERSION=1.43 (or appropriate version) if you get API version errors
-[ -n "$DOCKER_API_VERSION" ] && export DOCKER_API_VERSION
+# If not set, will be auto-detected from the Docker daemon
+[ -n "${DOCKER_API_VERSION:-}" ] && export DOCKER_API_VERSION
 
 # Dry-run mode: show what would be imported without making changes (closes #3)
 DRY_RUN="${DRY_RUN:-false}"
@@ -34,10 +38,48 @@ CUSTOM_BLOCKLISTS="${CUSTOM_BLOCKLISTS:-}"
 TELEMETRY_ENABLED="${TELEMETRY_ENABLED:-true}"
 TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
 
+# Docker socket path (configurable for non-standard setups like Unraid)
+DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
+
 # Counters
 SOURCES_OK=0
 SOURCES_FAILED=0
 SOURCES_SKIPPED=0
+
+# Track whether we should use socket fallback
+USE_SOCKET_FALLBACK=false
+
+# All known blocklist sources (shared between functions to avoid duplication)
+ALL_SOURCES=(
+    "IPsum"
+    "Spamhaus DROP"
+    "Spamhaus EDROP"
+    "Blocklist.de all"
+    "Blocklist.de SSH"
+    "Blocklist.de Apache"
+    "Blocklist.de mail"
+    "Firehol level1"
+    "Firehol level2"
+    "Feodo Tracker"
+    "SSL Blacklist"
+    "URLhaus"
+    "Emerging Threats"
+    "Binary Defense"
+    "Bruteforce Blocker"
+    "DShield"
+    "CI Army"
+    "Darklist"
+    "Talos"
+    "Charles Haley"
+    "Botvrij"
+    "myip.ms"
+    "GreenSnow"
+    "StopForumSpam"
+    "Tor exit nodes"
+    "Tor (dan.me.uk)"
+    "Shodan scanners"
+    "Censys"
+)
 
 # Logging
 log() {
@@ -113,38 +155,8 @@ show_stats() {
 # Log disabled sources at startup (closes #1)
 show_source_overrides() {
     local has_overrides=false
-    local all_sources=(
-        "IPsum"
-        "Spamhaus DROP"
-        "Spamhaus EDROP"
-        "Blocklist.de all"
-        "Blocklist.de SSH"
-        "Blocklist.de Apache"
-        "Blocklist.de mail"
-        "Firehol level1"
-        "Firehol level2"
-        "Feodo Tracker"
-        "SSL Blacklist"
-        "URLhaus"
-        "Emerging Threats"
-        "Binary Defense"
-        "Bruteforce Blocker"
-        "DShield"
-        "CI Army"
-        "Darklist"
-        "Talos"
-        "Charles Haley"
-        "Botvrij"
-        "myip.ms"
-        "GreenSnow"
-        "StopForumSpam"
-        "Tor exit nodes"
-        "Tor (dan.me.uk)"
-        "Shodan scanners"
-        "Censys"
-    )
 
-    for source in "${all_sources[@]}"; do
+    for source in "${ALL_SOURCES[@]}"; do
         local var_name="ENABLE_$(normalize_source_name "$source")"
         local value="${!var_name:-}"
         if [ "$value" = "false" ]; then
@@ -161,6 +173,53 @@ show_source_overrides() {
     fi
 }
 
+# Validate ENABLE_* environment variables and warn about typos (closes #14)
+validate_enable_vars() {
+    # Build list of valid ENABLE_ var names
+    local valid_vars=()
+    for source in "${ALL_SOURCES[@]}"; do
+        valid_vars+=("ENABLE_$(normalize_source_name "$source")")
+    done
+
+    # Check all ENABLE_* env vars against valid list
+    while IFS='=' read -r var_name var_value; do
+        [[ "$var_name" != ENABLE_* ]] && continue
+
+        local is_valid=false
+        for valid in "${valid_vars[@]}"; do
+            if [ "$var_name" = "$valid" ]; then
+                is_valid=true
+                break
+            fi
+        done
+
+        if [ "$is_valid" = false ]; then
+            # Try to suggest the closest match using prefix substring matching
+            local suggestion=""
+            local var_suffix="${var_name#ENABLE_}"
+            for valid in "${valid_vars[@]}"; do
+                local valid_suffix="${valid#ENABLE_}"
+                # Check if first 4+ chars overlap
+                if [ "${#var_suffix}" -ge 4 ] && [ "${#valid_suffix}" -ge 4 ]; then
+                    if [[ "$valid_suffix" == *"${var_suffix:0:4}"* ]] || [[ "$var_suffix" == *"${valid_suffix:0:4}"* ]]; then
+                        suggestion="$valid"
+                        break
+                    fi
+                elif [[ "$valid_suffix" == *"$var_suffix"* ]] || [[ "$var_suffix" == *"$valid_suffix"* ]]; then
+                    suggestion="$valid"
+                    break
+                fi
+            done
+
+            if [ -n "$suggestion" ]; then
+                warn "Unknown variable: ${var_name}=${var_value} (did you mean ${suggestion}?)"
+            else
+                warn "Unknown variable: ${var_name}=${var_value} (not a recognized source)"
+            fi
+        fi
+    done < <(env)
+}
+
 # Send telemetry
 send_telemetry() {
     local ip_count="$1"
@@ -174,10 +233,175 @@ send_telemetry() {
     debug "Telemetry sent"
 }
 
-# Run cscli command (handles both Docker and native modes)
+# Auto-detect Docker API version from the daemon (fixes #12)
+# Queries the Docker socket directly via curl, then falls back to docker CLI
+auto_detect_docker_api_version() {
+    if [ -n "${DOCKER_API_VERSION:-}" ]; then
+        debug "Docker API version already set: $DOCKER_API_VERSION"
+        return 0
+    fi
+
+    # Try to query the Docker daemon for its API version via the socket
+    if [ -S "$DOCKER_SOCKET" ]; then
+        local version_info
+        version_info=$(curl -s --unix-socket "$DOCKER_SOCKET" http://localhost/version 2>/dev/null) || true
+        if [ -n "$version_info" ]; then
+            local api_version
+            # Extract ApiVersion from JSON response (works without jq)
+            api_version=$(echo "$version_info" | grep -oE '"ApiVersion"\s*:\s*"[0-9.]+"' | head -1 | grep -oE '[0-9]+\.[0-9]+')
+            if [ -n "$api_version" ]; then
+                export DOCKER_API_VERSION="$api_version"
+                debug "Auto-detected Docker API version: $DOCKER_API_VERSION"
+                return 0
+            fi
+        fi
+    fi
+
+    # Fallback: try docker version command
+    local server_api
+    server_api=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null) || true
+    if [ -n "$server_api" ]; then
+        export DOCKER_API_VERSION="$server_api"
+        debug "Docker API version from docker CLI: $DOCKER_API_VERSION"
+        return 0
+    fi
+
+    debug "Could not auto-detect Docker API version"
+    return 1
+}
+
+# Check if a container exists and is running using curl against Docker socket (fixes #12)
+# Fallback when docker exec fails due to API version mismatch
+docker_socket_container_running() {
+    local container_name="$1"
+
+    if [ ! -S "$DOCKER_SOCKET" ]; then
+        return 1
+    fi
+
+    # Query Docker API for container info
+    local response
+    response=$(curl -s --unix-socket "$DOCKER_SOCKET" \
+        "http://localhost/containers/${container_name}/json" 2>/dev/null) || return 1
+
+    # Check if container is running (look for "Running":true in the State object)
+    if echo "$response" | grep -q '"Running"\s*:\s*true'; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Execute a command in a container using curl against Docker socket (fixes #12)
+# Used as fallback when docker exec fails due to API version mismatch
+docker_socket_exec() {
+    local container_name="$1"
+    shift
+    local cmd_json=""
+
+    # Build the JSON command array
+    local first=true
+    for arg in "$@"; do
+        local escaped_arg
+        escaped_arg=$(printf '%s' "$arg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        if [ "$first" = true ]; then
+            cmd_json="\"$escaped_arg\""
+            first=false
+        else
+            cmd_json="$cmd_json, \"$escaped_arg\""
+        fi
+    done
+
+    # Create exec instance via Docker API
+    local exec_response
+    exec_response=$(curl -s --unix-socket "$DOCKER_SOCKET" \
+        -X POST "http://localhost/containers/${container_name}/exec" \
+        -H "Content-Type: application/json" \
+        -d "{\"AttachStdout\": true, \"AttachStderr\": true, \"Cmd\": [$cmd_json]}" \
+        2>/dev/null) || return 1
+
+    # Extract exec ID from response
+    local exec_id
+    exec_id=$(echo "$exec_response" | grep -oE '"Id"\s*:\s*"[a-f0-9]+"' | head -1 | grep -oE '[a-f0-9]{12,}')
+    if [ -z "$exec_id" ]; then
+        return 1
+    fi
+
+    # Start exec and capture output
+    local output
+    output=$(curl -s --unix-socket "$DOCKER_SOCKET" \
+        -X POST "http://localhost/exec/${exec_id}/start" \
+        -H "Content-Type: application/json" \
+        -d '{"Detach": false, "Tty": false}' \
+        2>/dev/null) || return 1
+
+    # Check exec exit code
+    local inspect
+    inspect=$(curl -s --unix-socket "$DOCKER_SOCKET" \
+        "http://localhost/exec/${exec_id}/json" 2>/dev/null) || true
+    local exit_code
+    exit_code=$(echo "$inspect" | grep -oE '"ExitCode"\s*:\s*[0-9]+' | grep -oE '[0-9]+$') || true
+
+    echo "$output"
+
+    if [ -n "$exit_code" ] && [ "$exit_code" -ne 0 ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Execute a command in a container using curl, with stdin support (fixes #12)
+# Writes stdin data to a temp file inside the container, then runs the command
+# reading from that file. This avoids the complexity of Docker's multiplexed
+# stream protocol for interactive stdin.
+docker_socket_exec_stdin() {
+    local container_name="$1"
+    shift
+
+    # Read all stdin data first
+    local stdin_data
+    stdin_data=$(cat)
+
+    local tmpfile="/tmp/.blocklist-import-$$"
+
+    # Replace "-i -" in the command args with "-i $tmpfile"
+    local new_args=()
+    local prev_was_i=false
+    for arg in "$@"; do
+        if [ "$prev_was_i" = true ] && [ "$arg" = "-" ]; then
+            new_args+=("$tmpfile")
+            prev_was_i=false
+        else
+            new_args+=("$arg")
+            [ "$arg" = "-i" ] && prev_was_i=true || prev_was_i=false
+        fi
+    done
+
+    # Write the data into the container via base64 encoding to avoid quoting issues
+    local escaped_data
+    escaped_data=$(printf '%s' "$stdin_data" | base64)
+
+    docker_socket_exec "$container_name" sh -c "echo '$escaped_data' | base64 -d > $tmpfile" &>/dev/null || return 1
+
+    # Run the actual command with the temp file
+    local result
+    result=$(docker_socket_exec "$container_name" "${new_args[@]}")
+    local rc=$?
+
+    # Clean up temp file
+    docker_socket_exec "$container_name" rm -f "$tmpfile" &>/dev/null || true
+
+    echo "$result"
+    return $rc
+}
+
+# Run cscli command (handles Docker, native, and socket fallback modes)
 run_cscli() {
     if [ "$MODE" = "native" ]; then
         cscli "$@"
+    elif [ "$USE_SOCKET_FALLBACK" = true ]; then
+        docker_socket_exec "$CROWDSEC_CONTAINER" cscli "$@"
     else
         docker exec "$CROWDSEC_CONTAINER" cscli "$@"
     fi
@@ -187,6 +411,8 @@ run_cscli() {
 run_cscli_stdin() {
     if [ "$MODE" = "native" ]; then
         cscli "$@"
+    elif [ "$USE_SOCKET_FALLBACK" = true ]; then
+        docker_socket_exec_stdin "$CROWDSEC_CONTAINER" cscli "$@"
     else
         docker exec -i "$CROWDSEC_CONTAINER" cscli "$@"
     fi
@@ -198,23 +424,109 @@ find_crowdsec_container() {
 
     # First, check if Docker is accessible
     if ! docker ps &>/dev/null; then
+        # Docker CLI failed -- try the socket directly (fixes #12)
+        if [ -S "$DOCKER_SOCKET" ]; then
+            debug "Docker CLI failed, trying Docker socket directly..."
+            local socket_response
+            socket_response=$(curl -s --unix-socket "$DOCKER_SOCKET" \
+                "http://localhost/containers/json" 2>/dev/null) || true
+
+            if [ -z "$socket_response" ]; then
+                error "Cannot access Docker. Ensure Docker socket is mounted (-v /var/run/docker.sock:/var/run/docker.sock:ro)"
+                return 1
+            fi
+
+            # Docker socket works but CLI doesn't -- use socket fallback
+            debug "Docker socket accessible, CLI is not -- using socket fallback mode"
+
+            # Check if the specified container exists via socket
+            if docker_socket_container_running "$specified"; then
+                USE_SOCKET_FALLBACK=true
+                echo "$specified"
+                return 0
+            fi
+
+            # Try case-insensitive search via socket
+            local container_names
+            container_names=$(echo "$socket_response" | grep -oE '"Names"\s*:\s*\["/[^"]+"\]' | grep -oE '/[^"]+' | sed 's|^/||')
+            for name in $container_names; do
+                if echo "$name" | grep -qi "^${specified}$"; then
+                    if docker_socket_container_running "$name"; then
+                        warn "Found container '$name' via Docker socket (note: container names are case-sensitive)"
+                        warn "Set CROWDSEC_CONTAINER=$name for exact match"
+                        USE_SOCKET_FALLBACK=true
+                        echo "$name"
+                        return 0
+                    fi
+                fi
+            done
+
+            # Try to find any crowdsec container via socket
+            for name in $container_names; do
+                if echo "$name" | grep -qi 'crowdsec'; then
+                    if docker_socket_container_running "$name"; then
+                        warn "Auto-detected CrowdSec container via socket: '$name'"
+                        warn "Set CROWDSEC_CONTAINER=$name to avoid this warning"
+                        USE_SOCKET_FALLBACK=true
+                        echo "$name"
+                        return 0
+                    fi
+                fi
+            done
+
+            error "Docker socket accessible but cannot find CrowdSec container '$specified'"
+            return 1
+        fi
+
         error "Cannot access Docker. Ensure Docker socket is mounted (-v /var/run/docker.sock:/var/run/docker.sock:ro)"
         return 1
     fi
 
-    # Try the specified container first (exact match)
+    # Try the specified container first (exact match) using docker exec
     if docker exec "$specified" cscli version &>/dev/null; then
         echo "$specified"
         return 0
     fi
 
+    # docker exec failed -- could be API version mismatch (fixes #12)
+    # Try curl-based socket fallback to verify the container exists
+    if [ -S "$DOCKER_SOCKET" ] && docker_socket_container_running "$specified"; then
+        debug "docker exec failed but container '$specified' is running (API version mismatch?)"
+        debug "Switching to Docker socket fallback mode"
+
+        # Verify cscli is accessible via socket exec
+        if docker_socket_exec "$specified" cscli version &>/dev/null; then
+            USE_SOCKET_FALLBACK=true
+            warn "Using Docker socket API fallback (docker exec failed, likely API version mismatch)"
+            warn "Set DOCKER_API_VERSION=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || echo '1.43') to fix"
+            echo "$specified"
+            return 0
+        else
+            # Socket exec also failed for cscli -- container exists but cscli isn't available
+            debug "Container '$specified' is running but cscli is not accessible via socket exec either"
+        fi
+    fi
+
     # Try case-insensitive match of specified name
     local case_match=$(docker ps --format '{{.Names}}' | grep -i "^${specified}$" 2>/dev/null | head -1)
-    if [ -n "$case_match" ] && docker exec "$case_match" cscli version &>/dev/null; then
-        warn "Found container '$case_match' (note: container names are case-sensitive)"
-        warn "Set CROWDSEC_CONTAINER=$case_match for exact match"
-        echo "$case_match"
-        return 0
+    if [ -n "$case_match" ]; then
+        if docker exec "$case_match" cscli version &>/dev/null; then
+            warn "Found container '$case_match' (note: container names are case-sensitive)"
+            warn "Set CROWDSEC_CONTAINER=$case_match for exact match"
+            echo "$case_match"
+            return 0
+        fi
+
+        # Try socket fallback for case-insensitive match
+        if [ -S "$DOCKER_SOCKET" ] && docker_socket_container_running "$case_match"; then
+            if docker_socket_exec "$case_match" cscli version &>/dev/null; then
+                USE_SOCKET_FALLBACK=true
+                warn "Found container '$case_match' via socket fallback (note: container names are case-sensitive)"
+                warn "Set CROWDSEC_CONTAINER=$case_match for exact match"
+                echo "$case_match"
+                return 0
+            fi
+        fi
     fi
 
     debug "Container '$specified' not found or not running CrowdSec"
@@ -240,6 +552,17 @@ find_crowdsec_container() {
             echo "$candidate"
             return 0
         fi
+
+        # Try socket fallback for each candidate
+        if [ -S "$DOCKER_SOCKET" ] && docker_socket_container_running "$candidate"; then
+            if docker_socket_exec "$candidate" cscli version &>/dev/null; then
+                USE_SOCKET_FALLBACK=true
+                warn "Auto-detected CrowdSec container via socket fallback: '$candidate'"
+                warn "Set CROWDSEC_CONTAINER=$candidate to avoid this warning"
+                echo "$candidate"
+                return 0
+            fi
+        fi
     done
 
     return 1
@@ -247,6 +570,11 @@ find_crowdsec_container() {
 
 # Detect and configure CrowdSec access mode
 setup_crowdsec() {
+    # Auto-detect Docker API version before any Docker operations (fixes #12)
+    if [ "$MODE" != "native" ]; then
+        auto_detect_docker_api_version
+    fi
+
     if [ "$MODE" = "native" ]; then
         # User explicitly requested native mode
         if ! command -v cscli &>/dev/null; then
@@ -269,7 +597,11 @@ setup_crowdsec() {
             show_docker_help
             exit 1
         }
-        info "Using Docker mode with container '$CROWDSEC_CONTAINER'"
+        if [ "$USE_SOCKET_FALLBACK" = true ]; then
+            info "Using Docker socket API mode with container '$CROWDSEC_CONTAINER'"
+        else
+            info "Using Docker mode with container '$CROWDSEC_CONTAINER'"
+        fi
         return
     fi
 
@@ -286,7 +618,11 @@ setup_crowdsec() {
     # Try Docker
     if CROWDSEC_CONTAINER=$(find_crowdsec_container "$CROWDSEC_CONTAINER" 2>/dev/null); then
         MODE="docker"
-        info "Auto-detected Docker mode with container '$CROWDSEC_CONTAINER'"
+        if [ "$USE_SOCKET_FALLBACK" = true ]; then
+            info "Auto-detected Docker socket API mode with container '$CROWDSEC_CONTAINER'"
+        else
+            info "Auto-detected Docker mode with container '$CROWDSEC_CONTAINER'"
+        fi
         return
     fi
 
@@ -310,6 +646,10 @@ show_docker_help() {
     if docker ps &>/dev/null 2>&1; then
         error "Available containers:"
         docker ps --format '  {{.Names}} ({{.Image}})' 2>/dev/null || true
+    elif [ -S "$DOCKER_SOCKET" ]; then
+        error "Available containers (via socket):"
+        curl -s --unix-socket "$DOCKER_SOCKET" "http://localhost/containers/json" 2>/dev/null | \
+            grep -oE '"Names"\s*:\s*\["/[^"]+"\]' | grep -oE '/[^"]+' | sed 's|^/|  |' || true
     fi
 }
 
@@ -349,6 +689,18 @@ fetch_list() {
     fi
 }
 
+# List all available blocklist sources with their ENABLE_ var names (closes #13)
+list_sources() {
+    echo "Available blocklist sources (${#ALL_SOURCES[@]} built-in):"
+    for source in "${ALL_SOURCES[@]}"; do
+        local var_name="ENABLE_$(normalize_source_name "$source")"
+        local value="${!var_name:-true}"
+        local status="enabled"
+        [ "$value" = "false" ] && status="disabled"
+        printf "  %-38s %s (%s)\n" "${var_name}=true" "$source" "$status"
+    done
+}
+
 # Main import logic
 main() {
     info "========================================="
@@ -357,10 +709,13 @@ main() {
     info "Decision duration: $DECISION_DURATION"
     [ "$DRY_RUN" = "true" ] && info "DRY RUN MODE - no changes will be made"
     [ -n "$CUSTOM_BLOCKLISTS" ] && info "Custom blocklists: configured"
-    [ -n "$DOCKER_API_VERSION" ] && info "Docker API version: $DOCKER_API_VERSION"
+    [ -n "${DOCKER_API_VERSION:-}" ] && info "Docker API version: $DOCKER_API_VERSION"
 
     # Show any disabled source overrides
     show_source_overrides
+
+    # Validate ENABLE_* env vars for typos (closes #14)
+    validate_enable_vars
 
     setup_crowdsec
 
@@ -372,7 +727,7 @@ main() {
     touch "$TEMP_DIR/.stats"
 
     # Count enabled built-in sources
-    local total_builtin=28
+    local total_builtin=${#ALL_SOURCES[@]}
     info "Fetching blocklist sources (${total_builtin} built-in)..."
 
     # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
@@ -615,4 +970,58 @@ EOF
     info "Done!"
 }
 
-main "$@"
+# Parse command-line arguments (closes #13)
+case "${1:-}" in
+    --version|-v)
+        echo "crowdsec-blocklist-import v$VERSION"
+        exit 0
+        ;;
+    --help|-h)
+        cat <<HELP
+crowdsec-blocklist-import v$VERSION
+Imports 28+ public threat feeds into CrowdSec as ban decisions.
+
+Usage: import.sh [OPTIONS]
+
+Options:
+  --help, -h          Show this help message
+  --version, -v       Show version number
+  --list-sources      List all available blocklist sources
+  --dry-run           Run without making changes (same as DRY_RUN=true)
+
+Environment variables:
+  CROWDSEC_CONTAINER  CrowdSec container name (default: crowdsec)
+  DECISION_DURATION   How long bans last (default: 24h)
+  DRY_RUN             Set to "true" for dry-run mode
+  MODE                "docker", "native", or "auto" (default: auto)
+  LOG_LEVEL           DEBUG, INFO, WARN, ERROR (default: INFO)
+  CUSTOM_BLOCKLISTS   Comma-separated URLs of additional blocklists
+  DOCKER_API_VERSION  Override Docker API version (auto-detected if not set)
+  DOCKER_SOCKET       Docker socket path (default: /var/run/docker.sock)
+  FETCH_TIMEOUT       Timeout in seconds for fetching blocklists (default: 60)
+  TELEMETRY_ENABLED   Anonymous usage stats, set "false" to disable (default: true)
+
+Full documentation: https://github.com/wolffcatskyy/crowdsec-blocklist-import
+HELP
+        exit 0
+        ;;
+    --list-sources)
+        list_sources
+        exit 0
+        ;;
+    --dry-run)
+        DRY_RUN=true
+        shift
+        main "$@"
+        exit $?
+        ;;
+    "")
+        # No arguments -- run normally
+        main "$@"
+        ;;
+    *)
+        echo "Unknown option: $1"
+        echo "Run 'import.sh --help' for usage information."
+        exit 1
+        ;;
+esac
