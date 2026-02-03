@@ -6,19 +6,7 @@
 
 **Get premium-level threat protection for FREE.** Import 60,000+ IPs from 28 public threat feeds directly into CrowdSec - no subscription required.
 
----
-
-### We've Reinvented Contributing
-
-Every issue in this repo is **AI-Ready** — structured with full context, file paths, implementation guides, acceptance criteria, and a ready-to-use AI prompt at the bottom.
-
-**Pick an issue. Copy the prompt. Paste into your AI tool. Submit a PR.**
-
-No codebase knowledge required. No onboarding docs to read. Just pick an issue and go.
-
-[**Browse AI-Ready Issues →**](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues?q=is%3Aopen+label%3Aai-ready)
-
----
+> **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide.
 
 ## Why Use This?
 
@@ -355,8 +343,23 @@ This is expected — public lists occasionally go offline. The script continues 
 
 | Project | Description |
 |---------|-------------|
+| **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Get CrowdSec-parseable firewall logs from UniFi Dream Machines — detect port scans and brute force from your UDM/UDR |
 | **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Run CrowdSec's native firewall bouncer on UniFi OS — 100k+ IPs, 15MB RAM, survives firmware updates |
 | **[emby-playback-guardian](https://github.com/wolffcatskyy/emby-playback-guardian)** | Protect Emby/Jellyfin playback by pausing tasks during streaming |
+
+> **Complete UniFi + CrowdSec suite:** Use all three UniFi projects together for a full detect → decide → enforce feedback loop. The **parser** gives CrowdSec visibility into your firewall, this tool feeds it **threat intelligence**, and the **bouncer** enforces bans at the network edge.
+
+---
+
+### We've Reinvented Contributing
+
+Every issue in this repo is **AI-Ready** — structured with full context, file paths, implementation guides, acceptance criteria, and a ready-to-use AI prompt at the bottom.
+
+**Pick an issue. Copy the prompt. Paste into your AI tool. Submit a PR.**
+
+No codebase knowledge required. No onboarding docs to read. Just pick an issue and go.
+
+[**Browse AI-Ready Issues →**](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues?q=is%3Aopen+label%3Aai-ready)
 
 ## License
 
