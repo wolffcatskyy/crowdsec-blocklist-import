@@ -9,16 +9,16 @@
 ![License](https://img.shields.io/github/license/wolffcatskyy/crowdsec-blocklist-import)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
 
-**Get premium-level threat protection for FREE.** Import 95,000+ IPs from 36 public threat feeds directly into CrowdSec - no subscription required.
+**Get premium-level threat protection for FREE.** Import 120,000+ IPs from 36 public threat feeds directly into CrowdSec - no subscription required.
 
-> **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide.
+> **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide. Get started with the [official install guide](https://docs.crowdsec.net/docs/getting_started/install_crowdsec/).
 
 ## Why Use This?
 
 | | CrowdSec Free | CrowdSec Premium | **Free + This Tool** |
 |---|:---:|:---:|:---:|
 | Community Intel (CAPI) | ~15k IPs | 25k-100k+ IPs* | ~15k IPs |
-| Premium Blocklists | ❌ | ✅ | ✅ **95k+ IPs** |
+| Premium Blocklists | ❌ | ✅ | ✅ **120k+ IPs** |
 | Tor Exit Nodes | ❌ | ✅ | ✅ |
 | Scanner Blocking | ❌ | ✅ | ✅ |
 | All Your Bouncers | ✅ | ✅ | ✅ |
@@ -109,7 +109,7 @@
 | [Shodan](https://www.shodan.io/) scanners | Known Shodan scanner IPs | ~60 |
 | [Censys](https://censys.io/) scanners | Censys scanner IP ranges | 4 |
 
-**Total: ~95,000 unique IPs** (after deduplication)
+**Total: ~120,000 unique IPs** (after deduplication)
 
 ## Quick Start
 
