@@ -8,6 +8,9 @@
 
 set -e
 
+# Ensure standard paths are available (fixes: "sudo ./import.sh" not finding docker/cscli)
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/bin:/snap/bin:$PATH"
+
 VERSION="2.0.0"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"

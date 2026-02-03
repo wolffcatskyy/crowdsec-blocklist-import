@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# Ensure standard paths are available (fixes: "sudo ./install.sh" not finding docker/cscli)
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/bin:/snap/bin:$PATH"
+
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.crowdsec-blocklist-import}"
 IMAGE="ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest"
 MACHINE_ID="blocklist-importer"
