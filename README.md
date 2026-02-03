@@ -365,7 +365,7 @@ Before using this tool, you need:
 
 | Project | Description |
 |---------|-------------|
-| **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Sync CrowdSec decisions to UniFi firewall groups |
+| **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Run CrowdSec's native firewall bouncer on UniFi OS — 100k+ IPs, 15MB RAM, survives firmware updates |
 | **[emby-playback-guardian](https://github.com/wolffcatskyy/emby-playback-guardian)** | Protect Emby/Jellyfin playback by pausing tasks during streaming |
 
 ## License
