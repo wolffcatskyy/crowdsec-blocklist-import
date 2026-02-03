@@ -153,6 +153,14 @@ show_source_overrides() {
         "Tor (dan.me.uk)"
         "Shodan scanners"
         "Censys"
+        "AbuseIPDB"
+        "Cybercrime Tracker"
+        "Monty Security C2"
+        "DShield Top Attackers"
+        "VXVault"
+        "IPsum level4"
+        "Firehol level3"
+        "Maltrail scanners"
     )
 
     for source in "${all_sources[@]}"; do
@@ -565,7 +573,7 @@ main() {
     touch "$TEMP_DIR/.stats"
 
     # Count enabled built-in sources
-    local total_builtin=28
+    local total_builtin=36
     info "Fetching blocklist sources (${total_builtin} built-in)..."
 
     # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
@@ -727,6 +735,58 @@ EOF
         ((SOURCES_SKIPPED++)) || true
         record_stat "Censys (disabled)" 0
     fi
+
+    # --- New Tier 1 High Priority Blocklists ---
+
+    # AbuseIPDB 99% confidence (via borestad mirror)
+    fetch_list "AbuseIPDB" \
+        "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4" \
+        "abuseipdb.txt" \
+        "grep -v '^#' | awk '{print \$1}'"
+
+    # Cybercrime Tracker C2 (FireHOL mirror)
+    fetch_list "Cybercrime Tracker" \
+        "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset" \
+        "cybercrime.txt" \
+        "grep -v '^#'"
+
+    # Monty Security C2 Tracker
+    fetch_list "Monty Security C2" \
+        "https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt" \
+        "monty_c2.txt" \
+        "cat"
+
+    # DShield Top Attackers
+    fetch_list "DShield Top Attackers" \
+        "https://feeds.dshield.org/top10-2.txt" \
+        "dshield_top.txt" \
+        "awk '{print \$1}' | grep -E '^[0-9]'"
+
+    # VXVault Malware (FireHOL mirror)
+    fetch_list "VXVault" \
+        "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset" \
+        "vxvault.txt" \
+        "grep -v '^#'"
+
+    # --- New Tier 2 Extended Coverage Blocklists ---
+
+    # IPsum Level 4+ (higher confidence than existing level 3)
+    fetch_list "IPsum level4" \
+        "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt" \
+        "ipsum4.txt" \
+        "grep -v '^#' | awk '{print \$1}'"
+
+    # Firehol Level 3 (extended 30-day coverage)
+    fetch_list "Firehol level3" \
+        "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset" \
+        "firehol_l3.txt" \
+        "grep -v '^#'"
+
+    # Maltrail mass scanners
+    fetch_list "Maltrail scanners" \
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt" \
+        "maltrail_scanner.txt" \
+        "grep -v '^#' | awk '{print \$1}'"
 
     # Custom blocklists (closes #2)
     if [ -n "$CUSTOM_BLOCKLISTS" ]; then

@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/github/license/wolffcatskyy/crowdsec-blocklist-import)
 ![Docker](https://img.shields.io/badge/docker-ready-blue)
 
-**Get premium-level threat protection for FREE.** Import 60,000+ IPs from 28 public threat feeds directly into CrowdSec - no subscription required.
+**Get premium-level threat protection for FREE.** Import 95,000+ IPs from 36 public threat feeds directly into CrowdSec - no subscription required.
 
 > **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide.
 
@@ -13,7 +13,7 @@
 | | CrowdSec Free | CrowdSec Premium | **Free + This Tool** |
 |---|:---:|:---:|:---:|
 | Community Intel (CAPI) | ~15k IPs | 25k-100k+ IPs* | ~15k IPs |
-| Premium Blocklists | ❌ | ✅ | ✅ **60k+ IPs** |
+| Premium Blocklists | ❌ | ✅ | ✅ **95k+ IPs** |
 | Tor Exit Nodes | ❌ | ✅ | ✅ |
 | Scanner Blocking | ❌ | ✅ | ✅ |
 | All Your Bouncers | ✅ | ✅ | ✅ |
@@ -42,7 +42,7 @@
 
 ## Features
 
-- **28+ Free Blocklists**: IPsum, Spamhaus, Firehol, Abuse.ch, Emerging Threats, and more
+- **36+ Free Blocklists**: IPsum, Spamhaus, Firehol, Abuse.ch, AbuseIPDB, C2 Trackers, and more
 - **Smart Deduplication**: Skips IPs already in CrowdSec (CAPI, Console lists, local detections)
 - **Private IP Filtering**: Automatically excludes RFC1918 and reserved ranges
 - **One-Line Installer** *(v2.1.0)*: Auto-detects CrowdSec and sets everything up
@@ -56,30 +56,55 @@
 
 ## Included Blocklists
 
-| Source | Description |
-|--------|-------------|
-| [IPsum](https://github.com/stamparm/ipsum) (level 3+) | Aggregated threat intel (on 3+ blocklists) |
-| [Spamhaus](https://www.spamhaus.org/drop/) DROP/EDROP | Known hijacked/malicious netblocks |
-| [Blocklist.de](https://www.blocklist.de/) | IPs reported for attacks (all/ssh/apache/mail) |
-| [Firehol](https://github.com/firehol/blocklist-ipsets) level1 + level2 | High confidence bad IPs |
-| [Feodo Tracker](https://feodotracker.abuse.ch/) | Banking trojan C2 servers |
-| [SSL Blacklist](https://sslbl.abuse.ch/) | Malicious SSL certificate IPs |
-| [Emerging Threats](https://rules.emergingthreats.net/) | Compromised IPs |
-| [Binary Defense](https://www.binarydefense.com/) | Ban list |
-| [Bruteforce Blocker](https://danger.rulez.sk/projects/bruteforceblocker/) | SSH/FTP brute force sources |
-| [DShield](https://www.dshield.org/) | SANS Internet Storm Center top attackers |
-| [CI Army](https://cinsscore.com/) | Cinsscore bad reputation |
-| [Darklist](https://www.darklist.de/) | SSH brute force |
-| [URLhaus](https://urlhaus.abuse.ch/) | Malware distribution IPs |
-| [Talos Intelligence](https://www.talosintelligence.com/) | Cisco threat intel |
-| [Charles Haley](https://charles.the-haleys.org/) | SSH dictionary attacks |
-| [Botvrij](https://www.botvrij.eu/) | Botnet C2 IPs |
-| [myip.ms](https://myip.ms/) | Blacklist database |
-| [GreenSnow](https://blocklist.greensnow.co/) | Attacker IPs |
-| [StopForumSpam](https://www.stopforumspam.com/) | Toxic spam IPs |
-| [Tor Project](https://check.torproject.org/) + [dan.me.uk](https://www.dan.me.uk/torlist/) | Tor exit nodes |
-| **Shodan scanners** | Known Shodan scanner IPs |
-| [Censys](https://censys.io/) scanners | Censys scanner IP ranges |
+### Tier 1: High-Priority Threat Feeds
+
+| Source | Description | IPs |
+|--------|-------------|-----|
+| **[AbuseIPDB](https://www.abuseipdb.com/)** (99% confidence) | Most reported IPs (updated daily) | ~74k |
+| [IPsum](https://github.com/stamparm/ipsum) (level 3 + level 4) | Aggregated threat intel (on 3+ / 4+ blocklists) | ~23k |
+| [Spamhaus](https://www.spamhaus.org/drop/) DROP/EDROP | Known hijacked/malicious netblocks | ~1k |
+| [Blocklist.de](https://www.blocklist.de/) | IPs reported for attacks (all/ssh/apache/mail) | ~15k |
+| [Firehol](https://github.com/firehol/blocklist-ipsets) (level 1-3) | High confidence bad IPs (1-day, 7-day, 30-day) | ~70k |
+| **[Cybercrime Tracker](https://github.com/firehol/blocklist-ipsets)** C2 | Active C2 servers | ~200 |
+| **[Monty Security C2](https://github.com/montysecurity/C2-Tracker)** | Command & Control tracker | ~2.5k |
+| [Feodo Tracker](https://feodotracker.abuse.ch/) | Banking trojan C2 servers | ~300 |
+| **[VXVault](https://github.com/firehol/blocklist-ipsets)** | Malware distribution IPs | ~60 |
+
+### Tier 2: Brute Force & Attack Sources
+
+| Source | Description | IPs |
+|--------|-------------|-----|
+| [Emerging Threats](https://rules.emergingthreats.net/) | Compromised IPs | ~3k |
+| [Binary Defense](https://www.binarydefense.com/) | Ban list | ~5k |
+| [Bruteforce Blocker](https://danger.rulez.sk/projects/bruteforceblocker/) | SSH/FTP brute force sources | ~10k |
+| [DShield](https://www.dshield.org/) | SANS Internet Storm Center attackers | ~20k |
+| **[DShield Top Attackers](https://feeds.dshield.org/)** | Top 10 most active attackers | ~20 |
+| [CI Army](https://cinsscore.com/) | Cinsscore bad reputation | ~15k |
+| [Darklist](https://www.darklist.de/) | SSH brute force | ~5k |
+| [Charles Haley](https://charles.the-haleys.org/) | SSH dictionary attacks | ~500 |
+| [GreenSnow](https://blocklist.greensnow.co/) | Attacker IPs | ~8k |
+
+### Tier 3: Malware, Spam & Scanning
+
+| Source | Description | IPs |
+|--------|-------------|-----|
+| [SSL Blacklist](https://sslbl.abuse.ch/) | Malicious SSL certificate IPs | deprecated |
+| [URLhaus](https://urlhaus.abuse.ch/) | Malware distribution IPs | ~2k |
+| [Talos Intelligence](https://www.talosintelligence.com/) | Cisco threat intel | ~500 |
+| [Botvrij](https://www.botvrij.eu/) | Botnet C2 IPs | ~200 |
+| [myip.ms](https://myip.ms/) | Blacklist database | ~3k |
+| [StopForumSpam](https://www.stopforumspam.com/) | Toxic spam IPs | ~400k |
+| **[Maltrail](https://github.com/stamparm/maltrail)** mass scanners | Research/malicious scanners | ~17k |
+
+### Tier 4: Scanners & Research Networks
+
+| Source | Description | IPs |
+|--------|-------------|-----|
+| [Tor Project](https://check.torproject.org/) + [dan.me.uk](https://www.dan.me.uk/torlist/) | Tor exit nodes | ~1.5k |
+| [Shodan](https://www.shodan.io/) scanners | Known Shodan scanner IPs | ~60 |
+| [Censys](https://censys.io/) scanners | Censys scanner IP ranges | 4 |
+
+**Total: ~95,000 unique IPs** (after deduplication)
 
 ## Quick Start
 
@@ -260,7 +285,7 @@ Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPA
 │                    ONE IMPORT = ALL BOUNCERS                    │
 └─────────────────────────────────────────────────────────────────┘
 
-     28 Free Blocklists ──► crowdsec-blocklist-import ──► CrowdSec
+     36 Free Blocklists ──► crowdsec-blocklist-import ──► CrowdSec
                                                               │
                     ┌─────────────────────────────────────────┤
                     │                    │                    │
@@ -272,7 +297,7 @@ Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPA
                               Network-Wide Protection
 ```
 
-1. **Fetch**: Downloads 28+ blocklists from public sources
+1. **Fetch**: Downloads 36+ blocklists from public sources
 2. **Combine**: Merges all IPs and removes duplicates
 3. **Filter**: Excludes private ranges (10.x, 192.168.x, etc.)
 4. **Dedupe**: Queries CrowdSec for existing decisions to avoid duplicates
