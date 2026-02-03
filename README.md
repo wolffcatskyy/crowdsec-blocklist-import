@@ -57,8 +57,8 @@ No codebase knowledge required. No onboarding docs to read. Just pick an issue a
 - **28+ Free Blocklists**: IPsum, Spamhaus, Firehol, Abuse.ch, Emerging Threats, and more
 - **Smart Deduplication**: Skips IPs already in CrowdSec (CAPI, Console lists, local detections)
 - **Private IP Filtering**: Automatically excludes RFC1918 and reserved ranges
+- **One-Line Installer** *(v2.1.0)*: Auto-detects CrowdSec and sets everything up
 - **Direct LAPI Mode** *(v2.0.0)*: Connect directly to CrowdSec's API — no Docker socket needed
-- **Docker Ready**: Run as a container with Docker socket access
 - **Cron Friendly**: Designed for daily runs with 24h decision expiration
 - **Selective Sources** *(v1.1.0)*: Enable/disable individual blocklists via `ENABLE_<SOURCE>` env vars
 - **Custom Blocklist URLs** *(v1.1.0)*: Import your own threat feeds via `CUSTOM_BLOCKLISTS`
@@ -260,32 +260,10 @@ Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPA
 
 ## Security
 
-### Docker Socket Access
-
-**The reality:** Docker socket access = root-equivalent access on the host. The `:ro` mount flag only prevents writing to the socket *file itself*, not API commands through it. Any container with socket access can run arbitrary containers, exec into others, etc.
-
-**This is the same trust model as:** Portainer, Watchtower, Traefik, Nginx Proxy Manager, Dozzle, and dozens of other popular self-hosted tools that mount the Docker socket.
-
-### Why Trust This Tool?
-
-| Factor | This Tool |
-|--------|-----------|
-| **Code size** | ~600 lines of bash |
-| **Audit time** | 15-20 minutes to read entirely |
-| **Persistence** | Runs once and exits immediately |
-| **What it does** | Downloads text files, runs one `cscli` command |
-| **Source** | 100% open source, inspect before running |
-
-**The only Docker commands it runs:**
-```bash
-docker exec $CONTAINER cscli version          # Check CrowdSec exists
-docker exec $CONTAINER cscli decisions list   # Get existing IPs
-docker exec $CONTAINER cscli decisions import # Import new IPs
-```
-
-### Don't Want Socket Access?
-
-**Use LAPI mode** (v2.0.0) — connects directly to CrowdSec's API. No Docker socket, no `cscli`, no `docker exec`. Just a URL and machine credentials. See [Quick Start](#quick-start).
+- ~600 lines of bash — fully auditable in minutes
+- Runs once and exits (no persistent daemon)
+- LAPI mode (default) needs only a URL and machine credentials — no Docker socket, no privileged access
+- 100% open source — inspect before running
 
 ## How It Works
 
@@ -327,48 +305,40 @@ docker exec crowdsec cscli decisions delete --all --reason external_blocklist
 
 ## Troubleshooting
 
-### "Cannot access CrowdSec container"
+### "Cannot find CrowdSec"
 
-The tool uses `docker exec` to run commands inside your CrowdSec container. Common issues:
-
-**1. Wrong container name**
 ```bash
-# Find your actual CrowdSec container name
+# Find your CrowdSec container
 docker ps --format '{{.Names}}' | grep -i crowdsec
 ```
-If using Docker Compose, the name might be `projectname_crowdsec_1` or `projectname-crowdsec-1`.
 
-**2. Docker socket not mounted**
-Make sure you have `-v /var/run/docker.sock:/var/run/docker.sock:ro` in your docker run/compose.
-
-**3. Different Docker host**
-This tool must run on the same Docker host as CrowdSec. It cannot connect to remote Docker daemons.
-
-**4. Docker API version mismatch** *(v1.1.0 fix)*
-If you see errors like `Error response from daemon: client version X.XX is too new`, set:
+If the name differs from `crowdsec`, set it explicitly:
 ```bash
--e DOCKER_API_VERSION=1.43
+-e CROWDSEC_CONTAINER=your_container_name
 ```
+
+With Docker Compose, the name might be `projectname-crowdsec-1`.
+
+### LAPI connection refused
+
+Ensure the blocklist-import container shares a Docker network with CrowdSec:
+```bash
+docker inspect crowdsec --format '{{json .NetworkSettings.Networks}}'
+```
+Add that network as `external` in your compose file, or use the one-line installer which handles this automatically.
 
 ### "No new IPs to import"
 
-This means all IPs from the blocklists are already in your CrowdSec decisions (from CAPI, console lists, or previous imports). This is normal on subsequent runs.
+All IPs from the blocklists are already in your CrowdSec decisions (from CAPI, console lists, or previous imports). This is normal on subsequent runs.
 
 ### Source Fetch Warnings
 
-Some blocklists may be temporarily unavailable. The script will show:
+Some blocklists may be temporarily unavailable:
 ```
 Sources: 25 successful, 3 unavailable, 0 disabled
 ```
 
-This is expected - public lists occasionally go offline. The script continues with available sources and will retry unavailable ones on the next run.
-
-### Prerequisites
-
-Before using this tool, you need:
-1. **CrowdSec running** in a Docker container (or natively for direct mode)
-2. **CrowdSec LAPI working** - verify with: `docker exec crowdsec cscli decisions list`
-3. **Docker socket access** for Docker mode (or `cscli` in PATH for direct mode)
+This is expected — public lists occasionally go offline. The script continues with available sources and retries on the next run.
 
 ## Roadmap
 
@@ -377,7 +347,9 @@ Before using this tool, you need:
 - [x] **Dry run mode** (v1.1.0) - `DRY_RUN=true`
 - [x] **Per-source statistics** (v1.1.0) - Summary table after each run
 - [x] **Direct LAPI mode** (v2.0.0) - Import via HTTP API without Docker socket ([#9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9))
+- [x] **One-line installer** (v2.1.0) - Auto-detect CrowdSec, configure LAPI, set up cron
 - [ ] **Prometheus metrics** ([#6](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/6)) - Export import statistics
+- [ ] **Built-in scheduler** ([#5](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/5)) - Continuously running container with auto-refresh
 
 ## Related Projects
 
