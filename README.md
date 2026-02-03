@@ -95,7 +95,25 @@ No codebase knowledge required. No onboarding docs to read. Just pick an issue a
 
 ## Quick Start
 
-### LAPI Mode (Recommended — v2.0.0)
+### One-Line Install (Recommended)
+
+Auto-detects your CrowdSec instance (works with Pangolin, Docker Compose, standalone, native):
+
+```bash
+curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/install.sh | bash
+```
+
+The installer will:
+1. Find your running CrowdSec container (any name, any network)
+2. Create LAPI credentials automatically
+3. Join the correct Docker network
+4. Generate a `docker-compose.yml` in `~/.crowdsec-blocklist-import/`
+5. Run the first import
+6. Optionally set up a daily cron job
+
+> **Pangolin users:** The installer auto-detects CrowdSec installed by the Pangolin installer script. No extra configuration needed.
+
+### LAPI Mode (Manual — v2.0.0)
 
 No Docker socket. No `cscli`. Just a URL and credentials.
 
