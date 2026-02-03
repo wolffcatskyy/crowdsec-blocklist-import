@@ -2,12 +2,13 @@
 # CrowdSec Blocklist Import
 # Imports 28+ public threat feeds directly into CrowdSec
 #
+# v2.0.0 - Direct LAPI mode: no Docker socket needed (closes #9, #10)
 # v1.1.0 - Selective blocklists, custom URLs, dry-run mode, per-source stats
 #           Fixes: MODE case sensitivity (#12), DOCKER_API_VERSION support (#12)
 
 set -e
 
-VERSION="1.1.0"
+VERSION="2.0.0"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -16,9 +17,16 @@ TEMP_DIR="/tmp/blocklist-import"
 # Fetch timeout in seconds (increase for slow connections)
 FETCH_TIMEOUT="${FETCH_TIMEOUT:-60}"
 
-# Mode: "docker" or "native" (auto-detected if not set)
+# Mode: "lapi", "docker", or "native" (auto-detected if not set)
 # Accept both MODE and mode env vars (fixes #12)
 MODE="${MODE:-${mode:-auto}}"
+
+# LAPI mode: connect directly to CrowdSec API — no Docker socket needed (closes #9)
+CROWDSEC_LAPI_URL="${CROWDSEC_LAPI_URL:-}"
+CROWDSEC_MACHINE_ID="${CROWDSEC_MACHINE_ID:-}"
+CROWDSEC_MACHINE_PASSWORD="${CROWDSEC_MACHINE_PASSWORD:-}"
+LAPI_BATCH_SIZE="${LAPI_BATCH_SIZE:-1000}"
+LAPI_TOKEN=""
 
 # Docker API version override (fixes #12 - Docker CLI 24 vs Engine 25+ mismatch)
 # Set DOCKER_API_VERSION=1.43 (or appropriate version) if you get API version errors
@@ -247,6 +255,24 @@ find_crowdsec_container() {
 
 # Detect and configure CrowdSec access mode
 setup_crowdsec() {
+    if [ "$MODE" = "lapi" ]; then
+        # User explicitly requested LAPI mode
+        if [ -z "$CROWDSEC_LAPI_URL" ]; then
+            error "LAPI mode requires CROWDSEC_LAPI_URL"
+            exit 1
+        fi
+        if [ -z "$CROWDSEC_MACHINE_ID" ] || [ -z "$CROWDSEC_MACHINE_PASSWORD" ]; then
+            error "LAPI mode requires CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD"
+            error ""
+            error "On your CrowdSec host, run:"
+            error "  cscli machines add blocklist-importer --password YOUR_PASSWORD"
+            exit 1
+        fi
+        lapi_login || exit 1
+        info "Using LAPI mode (${CROWDSEC_LAPI_URL})"
+        return
+    fi
+
     if [ "$MODE" = "native" ]; then
         # User explicitly requested native mode
         if ! command -v cscli &>/dev/null; then
@@ -276,7 +302,17 @@ setup_crowdsec() {
     # Auto-detect mode
     debug "Auto-detecting CrowdSec mode..."
 
-    # Try native first (if cscli is in PATH and working)
+    # Try LAPI first (if URL and credentials are set)
+    if [ -n "$CROWDSEC_LAPI_URL" ] && [ -n "$CROWDSEC_MACHINE_ID" ] && [ -n "$CROWDSEC_MACHINE_PASSWORD" ]; then
+        if lapi_login 2>/dev/null; then
+            MODE="lapi"
+            info "Auto-detected LAPI mode (${CROWDSEC_LAPI_URL})"
+            return
+        fi
+        warn "LAPI credentials provided but login failed, trying other modes..."
+    fi
+
+    # Try native (if cscli is in PATH and working)
     if command -v cscli &>/dev/null && cscli version &>/dev/null 2>&1; then
         MODE="native"
         info "Auto-detected native CrowdSec (cscli in PATH)"
@@ -294,8 +330,9 @@ setup_crowdsec() {
     error "Cannot find CrowdSec installation"
     error ""
     error "Options:"
-    error "  1. Native install: Make sure 'cscli' is in your PATH"
-    error "  2. Docker: Mount the socket and set CROWDSEC_CONTAINER"
+    error "  1. LAPI: Set CROWDSEC_LAPI_URL, CROWDSEC_MACHINE_ID, CROWDSEC_MACHINE_PASSWORD"
+    error "  2. Native: Make sure 'cscli' is in your PATH"
+    error "  3. Docker: Mount the socket and set CROWDSEC_CONTAINER"
     error ""
     show_docker_help
     exit 1
@@ -310,6 +347,158 @@ show_docker_help() {
     if docker ps &>/dev/null 2>&1; then
         error "Available containers:"
         docker ps --format '  {{.Names}} ({{.Image}})' 2>/dev/null || true
+    fi
+}
+
+# --- LAPI mode functions (closes #9, #10) ---
+
+# Strip trailing slash from URL
+normalize_url() {
+    echo "${1%/}"
+}
+
+# Login to CrowdSec LAPI, get JWT token
+lapi_login() {
+    local url="$(normalize_url "$CROWDSEC_LAPI_URL")"
+    debug "LAPI login to $url..."
+
+    local response
+    response=$(curl -s -X POST "${url}/v1/watchers/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"machine_id\":\"${CROWDSEC_MACHINE_ID}\",\"password\":\"${CROWDSEC_MACHINE_PASSWORD}\"}" \
+        --max-time 10 2>&1) || {
+        error "LAPI login request failed (connection error)"
+        return 1
+    }
+
+    # Extract token (no jq dependency)
+    LAPI_TOKEN=$(echo "$response" | grep -o '"token":"[^"]*"' | head -1 | sed 's/"token":"//;s/"$//')
+
+    if [ -z "$LAPI_TOKEN" ]; then
+        error "LAPI login failed"
+        # Check for common errors
+        if echo "$response" | grep -qi "password"; then
+            error "Check CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD"
+        elif echo "$response" | grep -qi "connection refused"; then
+            error "Cannot reach LAPI at $url"
+        else
+            error "Response: $response"
+        fi
+        return 1
+    fi
+
+    debug "LAPI login successful"
+}
+
+# List existing decisions via LAPI (for dedup)
+lapi_list_decisions() {
+    local url="$(normalize_url "$CROWDSEC_LAPI_URL")"
+    local page=0
+    local limit=1000
+    local all_ips=""
+
+    # Paginate through alerts with active decisions
+    while true; do
+        local offset=$((page * limit))
+        local response
+        response=$(curl -s "${url}/v1/alerts?has_active_decision=true&limit=${limit}&offset=${offset}" \
+            -H "Authorization: Bearer $LAPI_TOKEN" \
+            --max-time 30 2>/dev/null) || break
+
+        # Extract IPs from decisions in alerts
+        local ips
+        ips=$(echo "$response" | grep -oE '"value":"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"' | \
+            sed 's/"value":"//;s/"$//')
+
+        [ -z "$ips" ] && break
+
+        echo "$ips"
+        # If we got fewer than limit, we've reached the end
+        local count=$(echo "$ips" | wc -l)
+        [ "$count" -lt "$limit" ] && break
+        page=$((page + 1))
+    done | sort -u
+}
+
+# Import a batch of IPs via POST /v1/alerts
+lapi_import_batch() {
+    local batch_file="$1"
+    local batch_num="$2"
+    local url="$(normalize_url "$CROWDSEC_LAPI_URL")"
+    local now=$(date -u "+%Y-%m-%dT%H:%M:%SZ")
+    local payload_file="$TEMP_DIR/payload_${batch_num}.json"
+
+    # Build JSON payload using awk (fast, no jq needed)
+    awk -v dur="$DECISION_DURATION" -v now="$now" -v bn="$batch_num" '
+        BEGIN {
+            printf "[{\"scenario\":\"crowdsec-blocklist-import/external_blocklist\","
+            printf "\"scenario_hash\":\"\",\"scenario_version\":\"\","
+            printf "\"message\":\"External blocklist import batch %s\",", bn
+            printf "\"events_count\":1,"
+            printf "\"start_at\":\"%s\",\"stop_at\":\"%s\",", now, now
+            printf "\"capacity\":0,\"leakspeed\":\"0\",\"simulated\":false,"
+            printf "\"events\":[],\"source\":{\"scope\":\"ip\",\"value\":\"127.0.0.1\"},"
+            printf "\"decisions\":["
+            first=1
+        }
+        NF {
+            if (!first) printf ","
+            printf "{\"origin\":\"cscli\",\"type\":\"ban\",\"scope\":\"ip\","
+            printf "\"value\":\"%s\",\"duration\":\"%s\",",$0, dur
+            printf "\"scenario\":\"crowdsec-blocklist-import/external_blocklist\"}"
+            first=0
+        }
+        END {
+            printf "]}]"
+        }
+    ' "$batch_file" > "$payload_file"
+
+    local response
+    response=$(curl -s -X POST "${url}/v1/alerts" \
+        -H "Authorization: Bearer $LAPI_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d @"$payload_file" \
+        --max-time 120 2>&1)
+
+    rm -f "$payload_file"
+
+    # Check for success (response is array of alert IDs)
+    if echo "$response" | grep -qE '^\['; then
+        return 0
+    else
+        warn "Batch $batch_num: $response"
+        return 1
+    fi
+}
+
+# Import all IPs via LAPI in batches
+lapi_import() {
+    local ip_file="$1"
+    local total=$(wc -l < "$ip_file")
+    local imported=0
+    local batch_num=0
+    local failed=0
+
+    while [ $imported -lt $total ]; do
+        batch_num=$((batch_num + 1))
+        local batch_file="$TEMP_DIR/batch_${batch_num}.txt"
+
+        # Extract batch
+        tail -n +$((imported + 1)) "$ip_file" | head -n "$LAPI_BATCH_SIZE" > "$batch_file"
+        local batch_count=$(wc -l < "$batch_file")
+
+        if lapi_import_batch "$batch_file" "$batch_num"; then
+            debug "Batch $batch_num: $batch_count IPs imported"
+        else
+            ((failed++)) || true
+        fi
+
+        imported=$((imported + batch_count))
+        rm -f "$batch_file"
+    done
+
+    if [ $failed -gt 0 ]; then
+        warn "$failed batch(es) had errors"
     fi
 }
 
@@ -358,6 +547,7 @@ main() {
     [ "$DRY_RUN" = "true" ] && info "DRY RUN MODE - no changes will be made"
     [ -n "$CUSTOM_BLOCKLISTS" ] && info "Custom blocklists: configured"
     [ -n "$DOCKER_API_VERSION" ] && info "Docker API version: $DOCKER_API_VERSION"
+    [ -n "$CROWDSEC_LAPI_URL" ] && info "LAPI: $CROWDSEC_LAPI_URL"
 
     # Show any disabled source overrides
     show_source_overrides
@@ -576,6 +766,11 @@ EOF
     if [ "$DRY_RUN" = "true" ]; then
         info "[DRY RUN] Skipping existing decisions check"
         touch existing.txt
+    elif [ "$MODE" = "lapi" ]; then
+        info "Checking existing CrowdSec decisions via LAPI..."
+        lapi_list_decisions > existing.txt 2>/dev/null || touch existing.txt
+        existing_count=$(wc -l < existing.txt)
+        debug "Found $existing_count existing decisions"
     else
         info "Checking existing CrowdSec decisions..."
         run_cscli decisions list 2>/dev/null | \
@@ -600,6 +795,10 @@ EOF
         info "[DRY RUN] Would import $import_count new IPs into CrowdSec (total coverage: $total_ips IPs)"
         info "[DRY RUN] Decision duration would be: $DECISION_DURATION"
         info "[DRY RUN] No changes were made"
+    elif [ "$MODE" = "lapi" ]; then
+        info "Importing $import_count new IPs via LAPI..."
+        lapi_import to_import.txt
+        info "Import complete: $import_count IPs added (total coverage: $total_ips IPs)"
     else
         info "Importing $import_count new IPs into CrowdSec..."
         result=$(cat to_import.txt | run_cscli_stdin decisions import -i - --format values --duration "$DECISION_DURATION" --reason "external_blocklist" 2>&1)

@@ -57,6 +57,7 @@ No codebase knowledge required. No onboarding docs to read. Just pick an issue a
 - **28+ Free Blocklists**: IPsum, Spamhaus, Firehol, Abuse.ch, Emerging Threats, and more
 - **Smart Deduplication**: Skips IPs already in CrowdSec (CAPI, Console lists, local detections)
 - **Private IP Filtering**: Automatically excludes RFC1918 and reserved ranges
+- **Direct LAPI Mode** *(v2.0.0)*: Connect directly to CrowdSec's API — no Docker socket needed
 - **Docker Ready**: Run as a container with Docker socket access
 - **Cron Friendly**: Designed for daily runs with 24h decision expiration
 - **Selective Sources** *(v1.1.0)*: Enable/disable individual blocklists via `ENABLE_<SOURCE>` env vars
@@ -94,11 +95,34 @@ No codebase knowledge required. No onboarding docs to read. Just pick an issue a
 
 ## Quick Start
 
-### Docker Compose (Recommended)
+### LAPI Mode (Recommended — v2.0.0)
+
+No Docker socket. No `cscli`. Just a URL and credentials.
 
 ```yaml
-version: "3.8"
+services:
+  crowdsec-blocklist-import:
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+    container_name: crowdsec-blocklist-import
+    restart: "no"
+    environment:
+      - CROWDSEC_LAPI_URL=http://crowdsec:8080
+      - CROWDSEC_MACHINE_ID=blocklist-importer
+      - CROWDSEC_MACHINE_PASSWORD=your_password_here
+      - DECISION_DURATION=24h
+      - TZ=America/New_York
+```
 
+**Setup:** On your CrowdSec host, register the machine:
+```bash
+cscli machines add blocklist-importer --password your_password_here
+```
+
+Then: `docker compose up`
+
+### Docker Mode (Legacy)
+
+```yaml
 services:
   crowdsec-blocklist-import:
     image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
@@ -107,7 +131,6 @@ services:
     environment:
       - CROWDSEC_CONTAINER=crowdsec
       - DECISION_DURATION=24h
-      - DRY_RUN=false
       - TZ=America/New_York
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -125,37 +148,42 @@ Run once: `docker compose up`
 ### Standalone Docker Run
 
 ```bash
+# LAPI mode (no socket needed)
+docker run --rm \
+  -e CROWDSEC_LAPI_URL=http://your-crowdsec:8080 \
+  -e CROWDSEC_MACHINE_ID=blocklist-importer \
+  -e CROWDSEC_MACHINE_PASSWORD=your_password \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+
+# Docker mode (legacy)
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -e CROWDSEC_CONTAINER=crowdsec \
   ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
-### Direct Mode (No Docker Socket)
+### Native Mode (No Docker)
 
-If you prefer not to mount the Docker socket, you can run the script directly on the host:
+Run directly on the host if `cscli` is in your PATH:
 
 ```bash
-# Download and run directly (requires curl, cscli in PATH)
 curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/import.sh | bash
 ```
-
-Or clone and run:
-
-```bash
-git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
-cd crowdsec-blocklist-import
-./import.sh
-```
-
-**Note:** Direct mode requires CrowdSec installed natively (not in Docker) with `cscli` in your PATH.
 
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `MODE` | `auto` | `auto`, `native`, or `docker` - how to access CrowdSec |
+| `MODE` | `auto` | `auto`, `lapi`, `native`, or `docker` - how to access CrowdSec |
+| **LAPI mode** | | |
+| `CROWDSEC_LAPI_URL` | _(empty)_ | CrowdSec LAPI URL (e.g., `http://crowdsec:8080`) |
+| `CROWDSEC_MACHINE_ID` | _(empty)_ | Machine ID (from `cscli machines add`) |
+| `CROWDSEC_MACHINE_PASSWORD` | _(empty)_ | Machine password |
+| `LAPI_BATCH_SIZE` | `1000` | IPs per API request (reduce if hitting timeouts) |
+| **Docker mode** | | |
 | `CROWDSEC_CONTAINER` | `crowdsec` | Name of your CrowdSec container (case-sensitive!) |
+| `DOCKER_API_VERSION` | _(auto)_ | Override Docker API version (set `1.43` for Docker CLI 24 + Engine 25+) |
+| **General** | | |
 | `DECISION_DURATION` | `24h` | How long decisions last (refresh daily) |
 | `FETCH_TIMEOUT` | `60` | Timeout in seconds for fetching blocklists (increase for slow connections) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARN, ERROR) |
@@ -164,7 +192,6 @@ cd crowdsec-blocklist-import
 | `DRY_RUN` | `false` | Preview mode - shows what would be imported without making changes |
 | `ENABLE_<SOURCE>` | `true` | Disable individual sources: `ENABLE_IPSUM=false`, `ENABLE_TOR_EXIT_NODES=false`, etc. |
 | `CUSTOM_BLOCKLISTS` | _(empty)_ | Comma-separated URLs of additional blocklists to import |
-| `DOCKER_API_VERSION` | _(auto)_ | Override Docker API version (set `1.43` for Docker CLI 24 + Engine 25+) |
 
 > **Note:** Container names are case-sensitive! If your container is named `Crowdsec` (capital C), set `CROWDSEC_CONTAINER=Crowdsec`.
 
@@ -172,11 +199,17 @@ cd crowdsec-blocklist-import
 
 The script auto-detects how CrowdSec is running:
 
-1. **Native** (preferred if available): Uses `cscli` directly from PATH
-2. **Docker**: Falls back to `docker exec` if native not found
+1. **LAPI** (preferred): Direct API connection — if `CROWDSEC_LAPI_URL` and machine credentials are set
+2. **Native**: Uses `cscli` directly from PATH
+3. **Docker**: Falls back to `docker exec`
 
 Force a specific mode:
 ```bash
+# LAPI mode (no Docker socket, no cscli needed)
+MODE=lapi CROWDSEC_LAPI_URL=http://crowdsec:8080 \
+  CROWDSEC_MACHINE_ID=blocklist-importer \
+  CROWDSEC_MACHINE_PASSWORD=mypass ./import.sh
+
 # Native CrowdSec (installed on host)
 MODE=native ./import.sh
 
@@ -234,19 +267,7 @@ docker exec $CONTAINER cscli decisions import # Import new IPs
 
 ### Don't Want Socket Access?
 
-**Option 1: Native mode** (CrowdSec on host, not Docker)
-```bash
-curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/import.sh | bash
-```
-
-**Option 2: Run script directly on Docker host**
-```bash
-git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
-cd crowdsec-blocklist-import
-MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
-```
-
-**Option 3: Coming soon** - Direct LAPI mode ([Issue #9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9)) will import via HTTP API with zero Docker access
+**Use LAPI mode** (v2.0.0) — connects directly to CrowdSec's API. No Docker socket, no `cscli`, no `docker exec`. Just a URL and machine credentials. See [Quick Start](#quick-start).
 
 ## How It Works
 
@@ -337,7 +358,7 @@ Before using this tool, you need:
 - [x] **Custom feed URLs** (v1.1.0) - `CUSTOM_BLOCKLISTS` env var
 - [x] **Dry run mode** (v1.1.0) - `DRY_RUN=true`
 - [x] **Per-source statistics** (v1.1.0) - Summary table after each run
-- [ ] **Direct LAPI mode** ([#9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9)) - Import via HTTP API without Docker socket
+- [x] **Direct LAPI mode** (v2.0.0) - Import via HTTP API without Docker socket ([#9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9))
 - [ ] **Prometheus metrics** ([#6](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/6)) - Export import statistics
 
 ## Related Projects
