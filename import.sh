@@ -11,7 +11,7 @@ set -e
 # Ensure standard paths are available (fixes: "sudo ./import.sh" not finding docker/cscli)
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/bin:/snap/bin:$PATH"
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -37,6 +37,12 @@ LAPI_TOKEN=""
 
 # Dry-run mode: show what would be imported without making changes (closes #3)
 DRY_RUN="${DRY_RUN:-false}"
+
+# Maximum total decisions to maintain in CrowdSec (importer-side guardrail)
+# If set, the importer will stop adding IPs once this total is reached.
+# Works with the bouncer-side memory guardrail (ensure-rules.sh) for two-layer protection.
+# Unset = no limit (default). Set based on your device's observed capacity.
+MAX_DECISIONS="${MAX_DECISIONS:-}"
 
 # Custom blocklist URLs, comma-separated (closes #2)
 CUSTOM_BLOCKLISTS="${CUSTOM_BLOCKLISTS:-}"
@@ -850,6 +856,23 @@ EOF
 
     import_count=$(wc -l < to_import.txt)
     total_ips=$(wc -l < filtered_private.txt)
+
+    # Importer-side guardrail: cap total decisions
+    if [ -n "$MAX_DECISIONS" ] && [ "$import_count" -gt 0 ]; then
+        existing_total=$(wc -l < existing.txt)
+        headroom=$((MAX_DECISIONS - existing_total))
+        if [ "$headroom" -le 0 ]; then
+            warn "MAX_DECISIONS=$MAX_DECISIONS reached ($existing_total existing). Skipping import."
+            import_count=0
+            : > to_import.txt
+        elif [ "$import_count" -gt "$headroom" ]; then
+            warn "Capping import: $import_count new IPs would exceed MAX_DECISIONS=$MAX_DECISIONS ($existing_total existing + $import_count new = $((existing_total + import_count)))"
+            head -n "$headroom" to_import.txt > to_import_capped.txt
+            mv to_import_capped.txt to_import.txt
+            import_count=$headroom
+            info "Importing $import_count IPs (capped to stay within MAX_DECISIONS=$MAX_DECISIONS)"
+        fi
+    fi
 
     if [[ $import_count -eq 0 ]]; then
         info "No new IPs to import (all $total_ips IPs already in CrowdSec)"
