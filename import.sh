@@ -2,6 +2,7 @@
 # CrowdSec Blocklist Import
 # Imports 28+ public threat feeds directly into CrowdSec
 #
+# v2.1.1 - Default MAX_DECISIONS=40000 to prevent bouncer overload (fixes #21)
 # v2.0.0 - Direct LAPI mode: no Docker socket needed (closes #9, #10)
 # v1.1.0 - Selective blocklists, custom URLs, dry-run mode, per-source stats
 #           Fixes: MODE case sensitivity (#12), DOCKER_API_VERSION support (#12)
@@ -11,7 +12,7 @@ set -e
 # Ensure standard paths are available (fixes: "sudo ./import.sh" not finding docker/cscli)
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/bin:/snap/bin:$PATH"
 
-VERSION="2.1.0"
+VERSION="2.1.1"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -41,8 +42,14 @@ DRY_RUN="${DRY_RUN:-false}"
 # Maximum total decisions to maintain in CrowdSec (importer-side guardrail)
 # If set, the importer will stop adding IPs once this total is reached.
 # Works with the bouncer-side memory guardrail (ensure-rules.sh) for two-layer protection.
-# Unset = no limit (default). Set based on your device's observed capacity.
-MAX_DECISIONS="${MAX_DECISIONS:-}"
+# Default: 40000 (safe for all tested UniFi devices including UDR).
+# Set to 0 or "unlimited" to disable the cap entirely (NOT recommended with embedded bouncers).
+# Recommended values by device:
+#   UDM SE / UDM Pro: 50000
+#   UDR:              15000
+#   USG-3P:           8000
+#   Linux server:     unlimited (set MAX_DECISIONS=0)
+MAX_DECISIONS="${MAX_DECISIONS:-40000}"
 
 # Device memory-aware importing (two-layer guardrail)
 # SSH target for the UniFi device running the bouncer, e.g. "root@192.168.1.1"
@@ -681,10 +688,16 @@ main() {
     info "CrowdSec Blocklist Import v$VERSION"
     info "========================================="
     info "Decision duration: $DECISION_DURATION"
+    if [ -n "$MAX_DECISIONS" ] && [ "$MAX_DECISIONS" != "0" ] && [ "$MAX_DECISIONS" != "unlimited" ]; then
+        info "Max decisions: $MAX_DECISIONS (set MAX_DECISIONS=0 to disable)"
+    else
+        warn "Max decisions: UNLIMITED (no cap — not recommended with embedded bouncers)"
+    fi
     [ "$DRY_RUN" = "true" ] && info "DRY RUN MODE - no changes will be made"
     [ -n "$CUSTOM_BLOCKLISTS" ] && info "Custom blocklists: configured"
     [ -n "$DOCKER_API_VERSION" ] && info "Docker API version: $DOCKER_API_VERSION"
     [ -n "$CROWDSEC_LAPI_URL" ] && info "LAPI: $CROWDSEC_LAPI_URL"
+    [ -n "$BOUNCER_SSH" ] && info "Device monitoring: $BOUNCER_SSH"
 
     # Show any disabled source overrides
     show_source_overrides
@@ -978,19 +991,36 @@ EOF
     total_ips=$(wc -l < filtered_private.txt)
 
     # Guardrail 1: cap total decisions (hard limit)
-    if [ -n "$MAX_DECISIONS" ] && [ "$import_count" -gt 0 ]; then
+    # MAX_DECISIONS=0 or "unlimited" disables the cap
+    local max_decisions_active=true
+    if [ -z "$MAX_DECISIONS" ] || [ "$MAX_DECISIONS" = "0" ] || [ "$MAX_DECISIONS" = "unlimited" ]; then
+        max_decisions_active=false
+    fi
+
+    if [ "$max_decisions_active" = true ] && [ "$import_count" -gt 0 ]; then
         existing_total=$(wc -l < existing.txt)
+        local projected_total=$((existing_total + import_count))
         headroom=$((MAX_DECISIONS - existing_total))
         if [ "$headroom" -le 0 ]; then
             warn "MAX_DECISIONS=$MAX_DECISIONS reached ($existing_total existing). Skipping import."
             import_count=0
             : > to_import.txt
         elif [ "$import_count" -gt "$headroom" ]; then
-            warn "Capping import: $import_count new IPs would exceed MAX_DECISIONS=$MAX_DECISIONS ($existing_total existing + $import_count new = $((existing_total + import_count)))"
+            warn "Capping import: $import_count new IPs would exceed MAX_DECISIONS=$MAX_DECISIONS ($existing_total existing + $import_count new = $projected_total)"
             head -n "$headroom" to_import.txt > to_import_capped.txt
             mv to_import_capped.txt to_import.txt
             import_count=$headroom
             info "Importing $import_count IPs (capped to stay within MAX_DECISIONS=$MAX_DECISIONS)"
+        fi
+    elif [ "$max_decisions_active" = false ] && [ "$import_count" -gt 0 ]; then
+        # No cap set — warn if total exceeds common embedded device limits
+        existing_total=$(wc -l < existing.txt)
+        local projected_total=$((existing_total + import_count))
+        if [ "$projected_total" -gt 65536 ]; then
+            warn "No MAX_DECISIONS cap set. Projected total: $projected_total decisions."
+            warn "This exceeds the default ipset maxelem (65536) on most embedded devices."
+            warn "If using a UniFi/embedded bouncer, set MAX_DECISIONS to prevent crashes."
+            warn "  UDM SE/Pro: MAX_DECISIONS=50000 | UDR: MAX_DECISIONS=15000 | USG: MAX_DECISIONS=8000"
         fi
     fi
 
