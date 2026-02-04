@@ -45,6 +45,8 @@
 
 > **Have a UniFi router?** Use our companion tool **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** to sync these bans directly to your router's firewall - block threats at the network edge!
 
+> **WARNING: Embedded device users (UniFi, pfSense, OPNsense)** — Importing all 120K+ IPs will crash the UniFi Network app and may make your router unresponsive. The default `MAX_DECISIONS=40000` cap prevents this. See [Firewall Bouncer Limits](#firewall-bouncer-limits--ipset-sizing) for per-device recommendations.
+
 ## Features
 
 - **36+ Free Blocklists**: IPsum, Spamhaus, Firehol, Abuse.ch, AbuseIPDB, C2 Trackers, and more
@@ -221,6 +223,9 @@ curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-impor
 | `DOCKER_API_VERSION` | _(auto)_ | Override Docker API version (set `1.43` for Docker CLI 24 + Engine 25+) |
 | **General** | | |
 | `DECISION_DURATION` | `24h` | How long decisions last (refresh daily) |
+| `MAX_DECISIONS` | `40000` | Max total decisions to import. Prevents bouncer overload. Set `0` to disable. See [Firewall Bouncer Limits](#firewall-bouncer-limits--ipset-sizing). |
+| `BOUNCER_SSH` | _(empty)_ | SSH target(s) for live device memory checks, e.g. `root@192.168.1.1`. Comma-separated for multiple devices. |
+| `DEVICE_MEM_FLOOR` | `300000` | Minimum MemAvailable (kB) to preserve on monitored devices |
 | `FETCH_TIMEOUT` | `60` | Timeout in seconds for fetching blocklists (increase for slow connections) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARN, ERROR) |
 | `TZ` | `UTC` | Timezone for logs |
@@ -321,6 +326,84 @@ docker exec crowdsec cscli decisions list -l 20
 docker exec crowdsec cscli decisions delete --all --reason external_blocklist
 ```
 
+## Firewall Bouncer Limits / ipset Sizing
+
+**This section is critical if you use CrowdSec with a firewall bouncer on an embedded device** (UniFi Dream Machines, USGs, pfSense boxes, etc.).
+
+### The Problem
+
+When this tool imports 120K+ IPs into CrowdSec, the firewall bouncer pushes all of them into an `ipset` (or `nftset`) on the firewall device. Embedded devices have hard limits on how many entries their kernel can handle. Exceeding these limits **crashes the UniFi Network application**, making all routers appear offline and requiring manual recovery from the console. ([#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21))
+
+### Recommended `MAX_DECISIONS` by Device
+
+| Device | ipset maxelem | Recommended `MAX_DECISIONS` | Notes |
+|--------|:------------:|:--------------------------:|-------|
+| **UDM SE / UDM Pro** | 120,000 | `50000` | Tested stable at 60K active entries |
+| **UDM (base)** | 65,536 | `40000` (default) | Default kernel limit |
+| **UDR** | 40,000 | `15000` | Tested stable at 20K entries |
+| **USG-3P** | ~15,000 | `8000` | Estimate — lower CPU/RAM |
+| **Linux server** | Unlimited | `0` (disables cap) | No practical limit |
+| **pfSense / OPNsense** | Varies | Test your device | Check `pfctl -t` table limits |
+
+> **Default: `MAX_DECISIONS=40000`** — safe for all tested UniFi devices. Override for your specific hardware.
+
+### Configuration Examples
+
+```yaml
+# UDM SE — can handle more entries
+environment:
+  - MAX_DECISIONS=50000
+
+# UDR — lower limit needed
+environment:
+  - MAX_DECISIONS=15000
+
+# Linux server bouncer — no limit needed
+environment:
+  - MAX_DECISIONS=0
+```
+
+### Two-Layer Protection (Advanced)
+
+For the safest setup, combine `MAX_DECISIONS` with live device monitoring via `BOUNCER_SSH`:
+
+```yaml
+environment:
+  - MAX_DECISIONS=50000
+  - BOUNCER_SSH=root@192.168.1.1
+  - DEVICE_MEM_FLOOR=300000
+```
+
+This queries your device's actual memory and ipset state before importing, and caps the import to whatever headroom remains. The tightest constraint wins — if your device only has room for 5,000 more entries, that becomes the cap regardless of `MAX_DECISIONS`.
+
+For multiple devices, comma-separate the SSH targets:
+```yaml
+  - BOUNCER_SSH=root@192.168.1.1,root@192.168.21.1
+```
+
+### Recovery: Network App Crash
+
+If the UniFi Network app has already crashed from too many ipset entries:
+
+```bash
+# 1. SSH into your UDM
+ssh root@192.168.1.1
+
+# 2. Flush the ipset
+ipset flush crowdsec-blacklists
+
+# 3. Restart the Network app
+unifi-os restart
+
+# 4. On your CrowdSec host, delete the excess decisions
+cscli decisions delete --scenario "crowdsec-blocklist-import/external_blocklist"
+# Or from Docker:
+docker exec crowdsec cscli decisions delete --scenario "crowdsec-blocklist-import/external_blocklist"
+
+# 5. Re-run the importer with a safe MAX_DECISIONS value
+MAX_DECISIONS=15000 docker compose up
+```
+
 ## Troubleshooting
 
 ### "Cannot find CrowdSec"
@@ -366,6 +449,7 @@ This is expected — public lists occasionally go offline. The script continues 
 - [x] **Per-source statistics** (v1.1.0) - Summary table after each run
 - [x] **Direct LAPI mode** (v2.0.0) - Import via HTTP API without Docker socket ([#9](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/9))
 - [x] **One-line installer** (v2.1.0) - Auto-detect CrowdSec, configure LAPI, set up cron
+- [x] **Decision cap** (v2.1.1) - `MAX_DECISIONS=40000` default prevents bouncer overload ([#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21))
 - [ ] **Prometheus metrics** ([#6](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/6)) - Export import statistics
 - [ ] **Built-in scheduler** ([#5](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/5)) - Continuously running container with auto-refresh
 

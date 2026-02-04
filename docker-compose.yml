@@ -11,16 +11,20 @@ services:
     environment:
       # CrowdSec container name (must be accessible via Docker socket)
       - CROWDSEC_CONTAINER=crowdsec
-      
+
       # How long decisions last (run script daily to refresh)
       - DECISION_DURATION=24h
-      
+
+      # Max total decisions — prevents bouncer overload on embedded devices (#21)
+      # UDM SE/Pro: 50000 | UDR: 15000 | USG: 8000 | Linux server: 0 (unlimited)
+      - MAX_DECISIONS=40000
+
       # Logging (DEBUG, INFO, WARN, ERROR)
       - LOG_LEVEL=INFO
-      
+
       # Timezone
       - TZ=America/New_York
-      
+
       # Anonymous telemetry (enabled by default, set to false to disable)
       - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
     
