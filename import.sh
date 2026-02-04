@@ -44,6 +44,20 @@ DRY_RUN="${DRY_RUN:-false}"
 # Unset = no limit (default). Set based on your device's observed capacity.
 MAX_DECISIONS="${MAX_DECISIONS:-}"
 
+# Device memory-aware importing (two-layer guardrail)
+# SSH target for the UniFi device running the bouncer, e.g. "root@192.168.1.1"
+# If set, the importer will:
+#   1. Deploy a lightweight memory agent on first run
+#   2. Query device memory before importing
+#   3. Calculate safe headroom and cap the import accordingly
+# Multiple devices: comma-separated, e.g. "root@192.168.1.1,root@192.168.21.1"
+# The device with the least headroom determines the cap.
+BOUNCER_SSH="${BOUNCER_SSH:-}"
+
+# Minimum MemAvailable (kB) to leave on the device after importing.
+# The importer will not add IPs if doing so would push memory below this.
+DEVICE_MEM_FLOOR="${DEVICE_MEM_FLOOR:-300000}"
+
 # Custom blocklist URLs, comma-separated (closes #2)
 CUSTOM_BLOCKLISTS="${CUSTOM_BLOCKLISTS:-}"
 
@@ -183,6 +197,112 @@ show_source_overrides() {
 
     if [ "$has_overrides" = true ]; then
         info ""
+    fi
+}
+
+# --- Device memory query (two-layer guardrail) ---
+
+# Deploy memory agent to device if not present
+deploy_memory_agent() {
+    local ssh_target="$1"
+    local agent_path="/data/crowdsec-bouncer/memory-agent.sh"
+
+    # Check if agent already exists
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_target" "test -f $agent_path" 2>/dev/null; then
+        debug "Memory agent already deployed on $ssh_target"
+        return 0
+    fi
+
+    info "Deploying memory agent to $ssh_target..."
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_target" "cat > $agent_path && chmod +x $agent_path" 2>/dev/null << 'AGENT'
+#!/bin/bash
+# CrowdSec memory agent — reports device state for safe importing
+# Deployed by crowdsec-blocklist-import
+IPSET_NAME="crowdsec-blacklists"
+MEM_AVAIL=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+MEM_TOTAL=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+IPSET_COUNT=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
+IPSET_MAXELEM=$(ipset list "$IPSET_NAME" -t 2>/dev/null | grep -oP 'maxelem \K[0-9]+')
+echo "mem_avail=${MEM_AVAIL:-0} mem_total=${MEM_TOTAL:-0} entries=${IPSET_COUNT:-0} maxelem=${IPSET_MAXELEM:-0}"
+AGENT
+
+    if [ $? -eq 0 ]; then
+        debug "Memory agent deployed to $ssh_target"
+        return 0
+    else
+        warn "Failed to deploy memory agent to $ssh_target"
+        return 1
+    fi
+}
+
+# Query device for current memory and ipset state
+query_device() {
+    local ssh_target="$1"
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$ssh_target" "/data/crowdsec-bouncer/memory-agent.sh" 2>/dev/null
+}
+
+# Calculate how many IPs we can safely add across all monitored devices
+# Returns the minimum headroom across all devices
+calculate_device_headroom() {
+    if [ -z "$BOUNCER_SSH" ]; then
+        return
+    fi
+
+    local min_headroom=""
+    local tightest_device=""
+
+    IFS=',' read -ra DEVICES <<< "$BOUNCER_SSH"
+    for device in "${DEVICES[@]}"; do
+        device=$(echo "$device" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$device" ] && continue
+
+        # Deploy agent if needed
+        deploy_memory_agent "$device" || continue
+
+        # Query current state
+        local state
+        state=$(query_device "$device")
+        if [ -z "$state" ]; then
+            warn "Cannot query $device — skipping device check"
+            continue
+        fi
+
+        # Parse response
+        local mem_avail mem_total entries maxelem
+        eval "$state"
+
+        info "Device $device: ${mem_avail}kB available, $entries entries loaded, maxelem=$maxelem"
+
+        # How much memory headroom above the floor?
+        local mem_headroom=$((mem_avail - DEVICE_MEM_FLOOR))
+        if [ "$mem_headroom" -le 0 ]; then
+            warn "Device $device already below memory floor (${mem_avail}kB < ${DEVICE_MEM_FLOOR}kB)"
+            echo "0"
+            return
+        fi
+
+        # How much ipset headroom below maxelem?
+        local ipset_headroom=999999
+        if [ "$maxelem" -gt 0 ]; then
+            ipset_headroom=$((maxelem - entries))
+        fi
+
+        # Use the smaller of the two constraints
+        local device_headroom="$ipset_headroom"
+        if [ "$device_headroom" -gt "$ipset_headroom" ]; then
+            device_headroom="$ipset_headroom"
+        fi
+
+        # Track the tightest device
+        if [ -z "$min_headroom" ] || [ "$device_headroom" -lt "$min_headroom" ]; then
+            min_headroom="$device_headroom"
+            tightest_device="$device"
+        fi
+    done
+
+    if [ -n "$min_headroom" ]; then
+        info "Device headroom: $min_headroom entries (limited by $tightest_device)"
+        echo "$min_headroom"
     fi
 }
 
@@ -857,7 +977,7 @@ EOF
     import_count=$(wc -l < to_import.txt)
     total_ips=$(wc -l < filtered_private.txt)
 
-    # Importer-side guardrail: cap total decisions
+    # Guardrail 1: cap total decisions (hard limit)
     if [ -n "$MAX_DECISIONS" ] && [ "$import_count" -gt 0 ]; then
         existing_total=$(wc -l < existing.txt)
         headroom=$((MAX_DECISIONS - existing_total))
@@ -871,6 +991,24 @@ EOF
             mv to_import_capped.txt to_import.txt
             import_count=$headroom
             info "Importing $import_count IPs (capped to stay within MAX_DECISIONS=$MAX_DECISIONS)"
+        fi
+    fi
+
+    # Guardrail 2: query device memory (adaptive limit)
+    if [ -n "$BOUNCER_SSH" ] && [ "$import_count" -gt 0 ]; then
+        device_headroom=$(calculate_device_headroom)
+        if [ -n "$device_headroom" ] && [ "$device_headroom" -ge 0 ]; then
+            if [ "$device_headroom" -eq 0 ]; then
+                warn "Device has no headroom. Skipping import."
+                import_count=0
+                : > to_import.txt
+            elif [ "$import_count" -gt "$device_headroom" ]; then
+                warn "Device headroom is $device_headroom entries — capping import (was $import_count)"
+                head -n "$device_headroom" to_import.txt > to_import_capped.txt
+                mv to_import_capped.txt to_import.txt
+                import_count=$device_headroom
+                info "Importing $import_count IPs (capped by device memory)"
+            fi
         fi
     fi
 
