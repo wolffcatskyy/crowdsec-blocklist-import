@@ -233,6 +233,9 @@ curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-impor
 | `DRY_RUN` | `false` | Preview mode - shows what would be imported without making changes |
 | `ENABLE_<SOURCE>` | `true` | Disable individual sources: `ENABLE_IPSUM=false`, `ENABLE_TOR_EXIT_NODES=false`, etc. |
 | `CUSTOM_BLOCKLISTS` | _(empty)_ | Comma-separated URLs of additional blocklists to import |
+| `ALLOWLIST_URL` | _(empty)_ | URL to fetch allow-list from (one IP/CIDR per line, # for comments) |
+| `ALLOWLIST_FILE` | _(empty)_ | Local file path containing allow-list (one IP/CIDR per line, # for comments) |
+| `ALLOWLIST` | _(empty)_ | Inline allow-list as comma-separated values (e.g. "1.1.1.1,8.8.8.8,192.168.1.0/24") |
 
 > **Note:** Container names are case-sensitive! If your container is named `Crowdsec` (capital C), set `CROWDSEC_CONTAINER=Crowdsec`.
 
@@ -279,6 +282,14 @@ Source name mapping: `IPsum` → `ENABLE_IPSUM`, `Spamhaus DROP` → `ENABLE_SPA
 
 ```bash
 -e CUSTOM_BLOCKLISTS="https://example.com/my-blocklist.txt,https://example.com/another.txt"
+```
+
+### Allow-lists (v2.2.0)
+
+Any matching entries are removed from the block-lists.
+
+```bash
+-e ALLOWLIST="140.82.121.3,140.82.121.4,140.82.121.5"
 ```
 
 ## Security
