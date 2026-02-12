@@ -40,7 +40,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "2.0.0"
+__version__ = "3.1.0"
 
 # =============================================================================
 # Configuration
@@ -81,6 +81,11 @@ class Config:
     telemetry_enabled: bool = True
     telemetry_url: str = "https://bouncer-telemetry.ms2738.workers.dev/ping"
 
+    # Allowlist settings (IPs to exclude from blocklists)
+    allowlist_url: str = ""      # URL to fetch allowlist from
+    allowlist_file: str = ""     # Local file path for allowlist
+    allowlist_inline: str = ""   # Comma-separated list of IPs/CIDRs
+
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
@@ -92,11 +97,7 @@ class Config:
     enable_bruteforce_blocker: bool = True
     enable_dshield: bool = True
     enable_ci_army: bool = True
-    enable_darklist: bool = True
-    enable_talos: bool = True
-    enable_charles_haley: bool = True
     enable_botvrij: bool = True
-    enable_myip_ms: bool = True
     enable_greensnow: bool = True
     enable_stopforumspam: bool = True
     enable_tor: bool = True
@@ -128,6 +129,9 @@ class Config:
             dry_run=get_bool("DRY_RUN", False),
             telemetry_enabled=get_bool("TELEMETRY_ENABLED", True),
             telemetry_url=os.getenv("TELEMETRY_URL", "https://bouncer-telemetry.ms2738.workers.dev/ping"),
+            allowlist_url=os.getenv("ALLOWLIST_URL", ""),
+            allowlist_file=os.getenv("ALLOWLIST_FILE", ""),
+            allowlist_inline=os.getenv("ALLOWLIST", ""),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
@@ -138,11 +142,7 @@ class Config:
             enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER"),
             enable_dshield=get_bool("ENABLE_DSHIELD"),
             enable_ci_army=get_bool("ENABLE_CI_ARMY"),
-            enable_darklist=get_bool("ENABLE_DARKLIST"),
-            enable_talos=get_bool("ENABLE_TALOS"),
-            enable_charles_haley=get_bool("ENABLE_CHARLES_HALEY"),
             enable_botvrij=get_bool("ENABLE_BOTVRIJ"),
-            enable_myip_ms=get_bool("ENABLE_MYIP_MS"),
             enable_greensnow=get_bool("ENABLE_GREENSNOW"),
             enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM"),
             enable_tor=get_bool("ENABLE_TOR"),
@@ -172,17 +172,10 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_ipsum",
         extract_field=0,
     ),
-    # Spamhaus DROP/EDROP
+    # Spamhaus DROP (EDROP deprecated)
     BlocklistSource(
         name="Spamhaus DROP",
         url="https://www.spamhaus.org/drop/drop.txt",
-        enabled_key="enable_spamhaus",
-        comment_char=";",
-        extract_field=0,
-    ),
-    BlocklistSource(
-        name="Spamhaus EDROP",
-        url="https://www.spamhaus.org/drop/edrop.txt",
         enabled_key="enable_spamhaus",
         comment_char=";",
         extract_field=0,
@@ -225,11 +218,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
         enabled_key="enable_abuse_ch",
     ),
-    BlocklistSource(
-        name="SSL Blacklist",
-        url="https://sslbl.abuse.ch/blacklist/sslipblacklist.txt",
-        enabled_key="enable_abuse_ch",
-    ),
+    # SSL Blacklist removed - deprecated by abuse.ch
     BlocklistSource(
         name="URLhaus",
         url="https://urlhaus.abuse.ch/downloads/text_online/",
@@ -262,31 +251,13 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://cinsscore.com/list/ci-badguys.txt",
         enabled_key="enable_ci_army",
     ),
-    BlocklistSource(
-        name="Darklist",
-        url="https://www.darklist.de/raw.php",
-        enabled_key="enable_darklist",
-    ),
-    BlocklistSource(
-        name="Talos",
-        url="https://www.talosintelligence.com/documents/ip-blacklist",
-        enabled_key="enable_talos",
-    ),
-    BlocklistSource(
-        name="Charles Haley",
-        url="https://charles.the-haleys.org/ssh_dico_attack_hdeny_format.php/hostsdeny.txt",
-        enabled_key="enable_charles_haley",
-    ),
+    # Removed dead sources: Darklist (empty), Talos (404), Charles Haley (404)
     BlocklistSource(
         name="Botvrij",
         url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
         enabled_key="enable_botvrij",
     ),
-    BlocklistSource(
-        name="myip.ms",
-        url="https://myip.ms/files/blacklist/general/full_blacklist_database.txt",
-        enabled_key="enable_myip_ms",
-    ),
+    # myip.ms removed - 404
     BlocklistSource(
         name="GreenSnow",
         url="https://blocklist.greensnow.co/greensnow.txt",
@@ -402,6 +373,84 @@ def parse_ip_or_network(value: str) -> Optional[str]:
             return str(ip)
     except (ValueError, TypeError):
         return None
+
+
+def load_allowlist(
+    config: "Config",
+    session: requests.Session,
+    logger: logging.Logger,
+) -> Set[str]:
+    """
+    Load allowlist from URL, file, and/or inline config.
+
+    Returns a set of IP addresses/CIDRs to exclude from blocklists.
+    Supports same formats as blocklists (one IP/CIDR per line, # comments).
+    """
+    allowlist: Set[str] = set()
+
+    # Load from URL
+    if config.allowlist_url:
+        try:
+            logger.debug(f"Loading allowlist from URL: {config.allowlist_url}")
+            response = session.get(
+                config.allowlist_url,
+                timeout=config.fetch_timeout,
+                headers={"User-Agent": f"crowdsec-blocklist-import/{__version__}"},
+            )
+            response.raise_for_status()
+            for line in response.text.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    parsed = parse_ip_or_network(line)
+                    if parsed:
+                        allowlist.add(parsed)
+            logger.debug(f"Loaded {len(allowlist)} entries from ALLOWLIST_URL")
+        except Exception as e:
+            logger.warning(f"Failed to load allowlist from URL: {e}")
+
+    # Load from file
+    if config.allowlist_file:
+        try:
+            logger.debug(f"Loading allowlist from file: {config.allowlist_file}")
+            with open(config.allowlist_file, "r") as f:
+                count_before = len(allowlist)
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parsed = parse_ip_or_network(line)
+                        if parsed:
+                            allowlist.add(parsed)
+                logger.debug(f"Loaded {len(allowlist) - count_before} entries from ALLOWLIST_FILE")
+        except Exception as e:
+            logger.warning(f"Failed to load allowlist from file: {e}")
+
+    # Load from inline config (comma-separated)
+    if config.allowlist_inline:
+        logger.debug("Loading allowlist from ALLOWLIST variable")
+        count_before = len(allowlist)
+        for entry in config.allowlist_inline.split(","):
+            entry = entry.strip()
+            if entry:
+                parsed = parse_ip_or_network(entry)
+                if parsed:
+                    allowlist.add(parsed)
+        logger.debug(f"Loaded {len(allowlist) - count_before} entries from ALLOWLIST")
+
+    if allowlist:
+        logger.info(f"Allowlist loaded: {len(allowlist)} unique entries")
+
+    return allowlist
+
+
+def is_allowlisted(ip: str, allowlist: Set[str]) -> bool:
+    """
+    Check if an IP or CIDR should be excluded based on allowlist.
+
+    Uses exact string matching for efficiency.
+    For CIDR-aware filtering, the allowlist should contain
+    the same notation used in blocklists.
+    """
+    return ip in allowlist
 
 
 def extract_ips_from_line(line: str, source: BlocklistSource) -> Generator[str, None, None]:
@@ -797,6 +846,7 @@ class ImportStats:
     imported_ok: int = 0
     imported_failed: int = 0
     existing_skipped: int = 0
+    allowlist_filtered: int = 0
     duration_seconds: float = 0.0
 
 
@@ -866,6 +916,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Track seen IPs for deduplication (includes existing)
     seen_ips: Set[str] = existing_ips.copy()
 
+    # Load allowlist
+    allowlist: Set[str] = set()
+    if config.allowlist_url or config.allowlist_file or config.allowlist_inline:
+        allowlist = load_allowlist(config, session, logger)
+
     # Collect enabled sources
     enabled_sources: list[BlocklistSource] = []
     for source in BLOCKLIST_SOURCES:
@@ -921,11 +976,14 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         else:
             stats.sources_failed += 1
 
-        # Add IPs to batch
+        # Add IPs to batch (filtering allowlisted entries)
         stats.total_ips_fetched += len(new_ips)
-        stats.new_ips += len(new_ips)
 
         for ip in new_ips:
+            if allowlist and is_allowlisted(ip, allowlist):
+                stats.allowlist_filtered += 1
+                continue
+            stats.new_ips += 1
             batch.append(ip)
             # Flush batch when full
             if len(batch) >= config.batch_size:
@@ -937,10 +995,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         for cidr in STATIC_SCANNER_IPS:
             if cidr not in seen_ips:
                 seen_ips.add(cidr)
+                if allowlist and is_allowlisted(cidr, allowlist):
+                    stats.allowlist_filtered += 1
+                    continue
                 batch.append(cidr)
                 stats.new_ips += 1
                 stats.total_ips_fetched += 1
         stats.sources_ok += 1
+
+    # Log allowlist stats
+    if stats.allowlist_filtered > 0:
+        logger.info(f"Allowlist filtered {stats.allowlist_filtered} IPs")
 
     # Flush any remaining IPs
     flush_batch()
