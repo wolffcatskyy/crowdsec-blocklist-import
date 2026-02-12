@@ -1,0 +1,134 @@
+name: "AI-Ready Bug Report"
+description: "Report a bug with enough context for AI-assisted fixing"
+title: "[Bug]: "
+labels: ["bug", "ai-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## AI-Ready Bug Report
+        Please fill out this form with as much detail as possible. The structured format helps both human contributors and AI assistants understand and fix the issue effectively.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One sentence describing the bug.
+      placeholder: "e.g., Blocklist import fails silently when the source URL returns a 301 redirect."
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current Behavior
+      description: What happens now? Be specific.
+      placeholder: "Describe exactly what occurs, including any error messages or unexpected output."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+      placeholder: "Describe the correct behavior you expect."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Configure blocklist with URL ...
+        2. Run import command ...
+        3. Observe that ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this bug?
+      options:
+        - "Critical - System crash, data loss, or security vulnerability"
+        - "High - Major feature broken, no workaround"
+        - "Medium - Feature broken but workaround exists"
+        - "Low - Minor issue, cosmetic, or edge case"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide details about your setup.
+      value: |
+        - OS: 
+        - Project version / commit: 
+        - Runtime (Python/Node/Docker version): 
+        - CrowdSec version: 
+        - Related services: 
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Paste any relevant log output or error messages.
+      render: shell
+      placeholder: "Paste relevant logs here. This field will be rendered as a code block."
+
+  - type: textarea
+    id: where-in-code
+    attributes:
+      label: Where in the Code
+      description: File, class, method, or line range where the bug likely lives.
+      placeholder: "e.g., src/importer.py, class BlocklistImporter, method fetch_list(), around line 45"
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Specific, testable requirements for the fix.
+      value: |
+        - [ ] 
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: What must not break? What must the fix be compatible with?
+      placeholder: |
+        - Must not break: ...
+        - Must work with: ...
+        - Cannot add: ...
+
+  - type: textarea
+    id: ai-prompt
+    attributes:
+      label: AI Prompt Template (optional)
+      description: A starting prompt contributors can paste into their AI assistant.
+      render: markdown
+      value: |
+        I'm fixing a bug in crowdsec-blocklist-import. Here's the context:
+
+        [Paste the project's AI context block from CONTRIBUTING.md]
+
+        The bug is: [paste this issue]
+
+        The relevant code is:
+        [paste the file/function mentioned in "Where in the Code"]
+
+        Please fix this bug while:
+        - Preserving existing behavior
+        - Following the project's code style
+        - Adding appropriate error handling
