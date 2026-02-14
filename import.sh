@@ -2,6 +2,7 @@
 # CrowdSec Blocklist Import
 # Imports 28+ public threat feeds directly into CrowdSec
 #
+# v2.2.0 - Implement allow-lists (fixes #26)
 # v2.1.1 - Default MAX_DECISIONS=40000 to prevent bouncer overload (fixes #21)
 # v2.0.0 - Direct LAPI mode: no Docker socket needed (closes #9, #10)
 # v1.1.0 - Selective blocklists, custom URLs, dry-run mode, per-source stats
@@ -12,7 +13,7 @@ set -e
 # Ensure standard paths are available (fixes: "sudo ./import.sh" not finding docker/cscli)
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/bin:/snap/bin:$PATH"
 
-VERSION="2.1.1"
+VERSION="2.2.0"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-crowdsec}"
 DECISION_DURATION="${DECISION_DURATION:-24h}"
@@ -68,6 +69,14 @@ DEVICE_MEM_FLOOR="${DEVICE_MEM_FLOOR:-300000}"
 # Custom blocklist URLs, comma-separated (closes #2)
 CUSTOM_BLOCKLISTS="${CUSTOM_BLOCKLISTS:-}"
 
+# Allow-list configuration (fixes #26)
+# URL to fetch allow-list from (one IP/CIDR per line, # for comments)
+ALLOWLIST_URL="${ALLOWLIST_URL:-}"
+# Local file path containing allow-list (one IP/CIDR per line, # for comments)
+ALLOWLIST_FILE="${ALLOWLIST_FILE:-}"
+# Inline allow-list as comma-separated values (e.g. "1.1.1.1,8.8.8.8,192.168.1.0/24")
+ALLOWLIST="${ALLOWLIST:-}"
+
 # Telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
 TELEMETRY_ENABLED="${TELEMETRY_ENABLED:-true}"
 TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
@@ -76,6 +85,8 @@ TELEMETRY_URL="https://bouncer-telemetry.ms2738.workers.dev/ping"
 SOURCES_OK=0
 SOURCES_FAILED=0
 SOURCES_SKIPPED=0
+ALLOWLIST_HITS=0
+ALLOWLIST_PATH=""
 
 # Logging
 log() {
@@ -205,6 +216,92 @@ show_source_overrides() {
     if [ "$has_overrides" = true ]; then
         info ""
     fi
+}
+
+# --- Allow-list functions (fixes #26) ---
+
+# Load allow-list from all configured sources
+load_allowlist() {
+    local allowlist_file="$TEMP_DIR/allowlist.txt"
+    touch "$allowlist_file"
+    local count=0
+
+    # Load from URL
+    if [ -n "$ALLOWLIST_URL" ]; then
+        debug "Loading allow-list from URL: $ALLOWLIST_URL"
+        if curl -sL --max-time "$FETCH_TIMEOUT" "$ALLOWLIST_URL" 2>/dev/null | \
+            grep -v '^#' | grep -v '^[[:space:]]*$' >> "$allowlist_file"; then
+            local url_count=$(wc -l < "$allowlist_file")
+            debug "Loaded $url_count entries from ALLOWLIST_URL"
+            count=$url_count
+        else
+            warn "Failed to fetch allow-list from $ALLOWLIST_URL"
+        fi
+    fi
+
+    # Load from local file
+    if [ -n "$ALLOWLIST_FILE" ]; then
+        if [ -f "$ALLOWLIST_FILE" ]; then
+            debug "Loading allow-list from file: $ALLOWLIST_FILE"
+            grep -v '^#' "$ALLOWLIST_FILE" | grep -v '^[[:space:]]*$' >> "$allowlist_file"
+            local file_count=$(wc -l < "$allowlist_file")
+            debug "Loaded $((file_count - count)) entries from ALLOWLIST_FILE"
+            count=$file_count
+        else
+            warn "Allow-list file not found: $ALLOWLIST_FILE"
+        fi
+    fi
+
+    # Load from inline CSV
+    if [ -n "$ALLOWLIST" ]; then
+        debug "Loading allow-list from ALLOWLIST variable"
+        echo "$ALLOWLIST" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
+            grep -v '^$' >> "$allowlist_file"
+        local inline_count=$(wc -l < "$allowlist_file")
+        debug "Loaded $((inline_count - count)) entries from ALLOWLIST"
+        count=$inline_count
+    fi
+
+    # Deduplicate and sort
+    if [ -s "$allowlist_file" ]; then
+        sort -u "$allowlist_file" -o "$allowlist_file"
+        count=$(wc -l < "$allowlist_file")
+        info "Allow-list loaded: $count unique entries"
+    else
+        debug "No allow-list configured"
+    fi
+
+    ALLOWLIST_PATH="$allowlist_file"
+}
+
+# Apply allow-list to a blocklist file
+# Removes any IPs that match allow-list entries (exact match)
+apply_allowlist() {
+    local input_file="$1"
+    local allowlist_file="$2"
+
+    # If no allow-list, return original file unchanged
+    if [ ! -s "$allowlist_file" ]; then
+        return
+    fi
+
+    local original_count=$(wc -l < "$input_file")
+    local temp_file="${input_file}.filtered"
+
+    # Use comm to efficiently remove allow-listed IPs
+    # Both files must be sorted for comm to work
+    sort "$input_file" -o "$input_file"
+    comm -23 "$input_file" "$allowlist_file" > "$temp_file"
+
+    local filtered_count=$(wc -l < "$temp_file")
+    local removed=$((original_count - filtered_count))
+
+    if [ "$removed" -gt 0 ]; then
+        info "Allow-list filtered $removed entries from $(basename "$input_file")"
+        ALLOWLIST_HITS=$((ALLOWLIST_HITS + removed))
+    fi
+
+    mv "$temp_file" "$input_file"
 }
 
 # --- Device memory query (two-layer guardrail) ---
@@ -711,6 +808,9 @@ main() {
     # Initialize stats file
     touch "$TEMP_DIR/.stats"
 
+    # Load allow-list (fixes #26)
+    load_allowlist
+
     # Count enabled built-in sources
     local total_builtin=36
     info "Fetching blocklist sources (${total_builtin} built-in)..."
@@ -963,6 +1063,15 @@ EOF
     # Filter private/reserved ranges
     grep -vE "^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|0\.|255\.|100\.(6[4-9]|[7-9][0-9]|1[0-2][0-7])\.)" combined.txt | \
     grep -vE "^(1\.0\.0\.1|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9|208\.67\.(222|220)\.(222|220))$" > filtered_private.txt
+
+    # Apply allow-list (fixes #26)
+    if [ -s "$ALLOWLIST_PATH" ]; then
+        info "Applying allow-list..."
+        apply_allowlist "filtered_private.txt" "$ALLOWLIST_PATH"
+        if [ "$ALLOWLIST_HITS" -gt 0 ]; then
+            info "Allow-list removed $ALLOWLIST_HITS IPs"
+        fi
+    fi
 
     # Get existing decisions to avoid duplicates
     if [ "$DRY_RUN" = "true" ]; then

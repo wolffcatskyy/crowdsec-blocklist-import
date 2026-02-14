@@ -214,3 +214,20 @@ ruff check blocklist_import.py
 ## License
 
 MIT License - see [LICENSE](LICENSE)
+
+### Allow-lists (v2.2.0)
+
+Remove specific IPs or CIDRs from blocklists before import:
+
+```bash
+# Inline allow-list
+-e ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
+
+# From URL
+-e ALLOWLIST_URL="https://example.com/my-allowlist.txt"
+
+# From file
+-e ALLOWLIST_FILE="/path/to/allowlist.txt"
+```
+
+Allow-list format: One IP or CIDR per line, `#` for comments.
