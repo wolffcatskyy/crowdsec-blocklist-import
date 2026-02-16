@@ -874,10 +874,14 @@ class ImportStats:
     duration_seconds: float = 0.0
 
 
-def read_password_file(password_file: str) -> str:
-    with open(password_file, 'r') as f:
-        lines = f.readlines()
-        return [l.replace("password: ", "").strip() for l in lines if len(lines) == 1 or l.startswith("password: ")][0]
+def read_secret_file(file_path: str) -> str:
+    """Read a secret from a file, stripping whitespace/newlines.
+
+    This follows the Docker secrets pattern where secrets are mounted
+    as files (typically at /run/secrets/<name>) containing just the value.
+    """
+    with open(file_path, 'r') as f:
+        return f.read().strip()
 
 
 def run_import(config: Config, logger: logging.Logger) -> ImportStats:
@@ -900,15 +904,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Create HTTP session with retry logic
     session = create_http_session(config.max_retries)
 
+    # Read secrets from files if _FILE env vars are set (Docker secrets pattern)
+    # _FILE takes precedence over direct value
     lapi_key = config.lapi_key
-    if not lapi_key and config.lapi_key_file:
-        lapi_key = read_password_file(config.lapi_key_file)
-        logger.debug(f"Read lapi_key from {config.lapi_key_file}")
+    if config.lapi_key_file:
+        lapi_key = read_secret_file(config.lapi_key_file)
+        logger.debug(f"Read LAPI key from {config.lapi_key_file}")
 
     machine_password = config.machine_password
-    if not machine_password and config.machine_password_file:
-        machine_password = read_password_file(config.machine_password_file)
-        logger.debug(f"Read machine_password from {config.machine_password_file}")
+    if config.machine_password_file:
+        machine_password = read_secret_file(config.machine_password_file)
+        logger.debug(f"Read machine password from {config.machine_password_file}")
 
     # Initialize LAPI client
     lapi = CrowdSecLAPI(

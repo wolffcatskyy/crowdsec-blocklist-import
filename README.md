@@ -51,6 +51,49 @@ networks:
     external: true
 ```
 
+### Docker Compose with Secrets
+
+For production deployments, use Docker secrets instead of environment variables:
+
+```yaml
+secrets:
+  crowdsec_lapi_key:
+    file: ./secrets/crowdsec_lapi_key.txt
+  crowdsec_machine_password:
+    file: ./secrets/crowdsec_machine_password.txt
+
+services:
+  blocklist-import:
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    container_name: blocklist-import
+    restart: "no"
+    networks:
+      - crowdsec
+    secrets:
+      - crowdsec_lapi_key
+      - crowdsec_machine_password
+    environment:
+      - CROWDSEC_LAPI_URL=http://crowdsec:8080
+      - CROWDSEC_LAPI_KEY_FILE=/run/secrets/crowdsec_lapi_key
+      - CROWDSEC_MACHINE_ID=blocklist-import
+      - CROWDSEC_MACHINE_PASSWORD_FILE=/run/secrets/crowdsec_machine_password
+      - DECISION_DURATION=24h
+      - TZ=America/New_York
+
+networks:
+  crowdsec:
+    external: true
+```
+
+Create the secrets files:
+
+```bash
+mkdir -p ./secrets
+echo "your-bouncer-api-key" > ./secrets/crowdsec_lapi_key.txt
+echo "your-machine-password" > ./secrets/crowdsec_machine_password.txt
+chmod 600 ./secrets/*.txt
+```
+
 ### Direct Execution
 
 ```bash
