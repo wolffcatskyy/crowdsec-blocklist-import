@@ -7,7 +7,7 @@ services:
     # image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: crowdsec-blocklist-import
     restart: "no"  # Run once and exit
-    
+
     environment:
       # CrowdSec container name (must be accessible via Docker socket)
       - CROWDSEC_CONTAINER=crowdsec
@@ -27,7 +27,15 @@ services:
 
       # Anonymous telemetry (enabled by default, set to false to disable)
       - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
-    
+
+      # Prometheus metrics (enabled by default on port 9102)
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+      - METRICS_PORT=${METRICS_PORT:-9102}
+
+    ports:
+      # Prometheus metrics endpoint
+      - "9102:9102"
+
     volumes:
       # Docker socket for accessing CrowdSec container
       - /var/run/docker.sock:/var/run/docker.sock:ro
