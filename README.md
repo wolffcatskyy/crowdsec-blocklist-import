@@ -13,6 +13,7 @@ Memory-efficient Python 3.11+ implementation of [crowdsec-blocklist-import](http
 - **Type Hints**: Full type annotations for IDE support
 - **30+ Blocklists**: Same sources as the bash version
 - **Per-feed Control**: Enable/disable individual blocklist sources
+- **Prometheus Metrics**: Built-in metrics endpoint for monitoring
 
 ## Quick Start
 
@@ -138,7 +139,8 @@ Examples:
 usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
                            [--lapi-key LAPI_KEY] [--duration DURATION]
                            [--batch-size BATCH_SIZE] [--validate]
-                           [--list-sources]
+                           [--list-sources] [--metrics-port PORT]
+                           [--no-metrics]
 
 options:
   -h, --help            show this help message and exit
@@ -151,6 +153,8 @@ options:
   --batch-size SIZE     IPs per import batch
   --validate            validate configuration and exit
   --list-sources        list all available blocklist sources
+  --metrics-port PORT   port for Prometheus metrics (default: 9102)
+  --no-metrics          disable Prometheus metrics endpoint
 ```
 
 ## Environment Variable Validation
@@ -228,6 +232,8 @@ cscli decisions delete --origin blocklist-import
 | `DRY_RUN` | `false` | Set to true for dry run |
 | `TELEMETRY_ENABLED` | `true` | Anonymous usage telemetry |
 | `TELEMETRY_URL` | `https://bouncer-telemetry.ms2738.workers.dev/ping` | Anonymous usage telemetry URL |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |
+| `METRICS_PORT` | `9102` | Port for Prometheus metrics HTTP server |
 
 ### Blocklist Toggles
 
@@ -272,6 +278,74 @@ This tool requires both:
 The `ALLOWLIST` environment variable can be used to specify block-list rows to ignore.
 
 If the original row to ignore ends contains comment, it should not be included in the allow-list item
+
+## Prometheus Metrics
+
+The blocklist importer exposes Prometheus metrics on port 9102 (configurable via `METRICS_PORT`).
+
+### Enabling Metrics
+
+Metrics are enabled by default. To expose them in Docker:
+
+```yaml
+services:
+  blocklist-import:
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    ports:
+      - "9102:9102"
+    environment:
+      - METRICS_ENABLED=true
+      - METRICS_PORT=9102
+```
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `blocklist_import_total_ips` | Gauge | Total number of IPs imported in the last run |
+| `blocklist_import_last_run_timestamp` | Gauge | Unix timestamp of the last import run |
+| `blocklist_import_sources_enabled` | Gauge | Number of enabled blocklist sources |
+| `blocklist_import_sources_successful` | Gauge | Number of sources successfully fetched |
+| `blocklist_import_sources_failed` | Gauge | Number of sources that failed to fetch |
+| `blocklist_import_existing_decisions` | Gauge | Number of existing CrowdSec decisions found |
+| `blocklist_import_new_ips` | Gauge | Number of new unique IPs added |
+| `blocklist_import_errors_total` | Counter | Total number of errors (labels: `error_type`) |
+| `blocklist_import_duration_seconds` | Histogram | Duration of import run in seconds |
+
+### Error Types
+
+The `blocklist_import_errors_total` counter uses the `error_type` label:
+
+- `fetch` - Failed to download a blocklist source
+- `parse` - Failed to parse an IP address from blocklist
+- `encoding` - Character encoding errors
+- `import` - Failed to import IPs to CrowdSec LAPI
+
+### Example Prometheus Config
+
+```yaml
+scrape_configs:
+  - job_name: 'blocklist-import'
+    static_configs:
+      - targets: ['blocklist-import:9102']
+    scrape_interval: 5m
+```
+
+### Example Grafana Queries
+
+```promql
+# IPs imported over time
+blocklist_import_total_ips
+
+# Import success rate
+blocklist_import_sources_successful / blocklist_import_sources_enabled
+
+# Time since last run (for alerting on stale imports)
+time() - blocklist_import_last_run_timestamp
+
+# Error rate by type
+rate(blocklist_import_errors_total[1h])
+```
 
 ## Memory Efficiency
 
