@@ -13,7 +13,11 @@ Features:
 - Retry logic with exponential backoff
 - Full type hints
 
-Author: Claude AI (wolffcatskyy/crowdsec-blocklist-import)
+Authors:
+
+- Claude AI (wolffcatskyy/crowdsec-blocklist-import)
+- gaelj
+
 License: MIT
 """
 
@@ -25,8 +29,8 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass, field
-from typing import Generator, Iterator, Optional, Set
+from dataclasses import dataclass
+from typing import Generator, Optional, Set
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,7 +44,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "2.0.0"
+__version__ = "3.2.0"
 
 # =============================================================================
 # Configuration
@@ -53,11 +57,13 @@ class Config:
     # CrowdSec LAPI settings
     lapi_url: str = "http://localhost:8080"
     lapi_key: str = ""  # Bouncer API key (for reading decisions)
+    lapi_key_file: str = ""  # Bouncer API key file (for reading decisions)
 
     # Machine credentials (for writing decisions via /alerts endpoint)
     # These are alternative to lapi_key for write operations
     machine_id: str = ""
     machine_password: str = ""
+    machine_password_file: str = ""
 
     # Decision settings
     decision_duration: str = "24h"
@@ -67,9 +73,12 @@ class Config:
     decision_scenario: str = "external/blocklist"
 
     # Processing settings
+    allow_list: list[str] = None
+    custom_block_lists: list[str] = None
     batch_size: int = 1000
     fetch_timeout: int = 60
     max_retries: int = 3
+    log_timestamps: bool = True
 
     # Logging
     log_level: str = "INFO"
@@ -92,15 +101,15 @@ class Config:
     enable_bruteforce_blocker: bool = True
     enable_dshield: bool = True
     enable_ci_army: bool = True
-    enable_darklist: bool = True
-    enable_talos: bool = True
-    enable_charles_haley: bool = True
     enable_botvrij: bool = True
-    enable_myip_ms: bool = True
     enable_greensnow: bool = True
     enable_stopforumspam: bool = True
     enable_tor: bool = True
     enable_scanners: bool = True
+    enable_abuseipdb: bool = True
+    enable_cybercrime_tracker: bool = True
+    enable_monty_security_c2: bool = True
+    enable_vxvault: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -114,17 +123,22 @@ class Config:
         return cls(
             lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
             lapi_key=os.getenv("CROWDSEC_LAPI_KEY", ""),
+            lapi_key_file=os.getenv("CROWDSEC_LAPI_KEY_FILE", ""),
             machine_id=os.getenv("CROWDSEC_MACHINE_ID", ""),
             machine_password=os.getenv("CROWDSEC_MACHINE_PASSWORD", ""),
+            machine_password_file=os.getenv("CROWDSEC_MACHINE_PASSWORD_FILE", ""),
             decision_duration=os.getenv("DECISION_DURATION", "24h"),
             decision_reason=os.getenv("DECISION_REASON", "external_blocklist"),
             decision_type=os.getenv("DECISION_TYPE", "ban"),
             decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
             decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
+            allow_list=[ l.strip() for l in os.getenv("ALLOWLIST", "").split(",") ],
+            custom_block_lists=[ l.strip() for l in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") ],
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
             fetch_timeout=int(os.getenv("FETCH_TIMEOUT", "60")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            log_timestamps=get_bool("LOG_TIMESTAMPS"),
             dry_run=get_bool("DRY_RUN", False),
             telemetry_enabled=get_bool("TELEMETRY_ENABLED", True),
             telemetry_url=os.getenv("TELEMETRY_URL", "https://bouncer-telemetry.ms2738.workers.dev/ping"),
@@ -138,15 +152,15 @@ class Config:
             enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER"),
             enable_dshield=get_bool("ENABLE_DSHIELD"),
             enable_ci_army=get_bool("ENABLE_CI_ARMY"),
-            enable_darklist=get_bool("ENABLE_DARKLIST"),
-            enable_talos=get_bool("ENABLE_TALOS"),
-            enable_charles_haley=get_bool("ENABLE_CHARLES_HALEY"),
             enable_botvrij=get_bool("ENABLE_BOTVRIJ"),
-            enable_myip_ms=get_bool("ENABLE_MYIP_MS"),
             enable_greensnow=get_bool("ENABLE_GREENSNOW"),
             enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM"),
             enable_tor=get_bool("ENABLE_TOR"),
             enable_scanners=get_bool("ENABLE_SCANNERS"),
+            enable_abuseipdb=get_bool("ENABLE_ABUSE_IPDB"),
+            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER"),
+            enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2"),
+            enable_vxvault=get_bool("ENABLE_VXVAULT"),
         )
 
 
@@ -170,19 +184,11 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         name="IPsum",
         url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
         enabled_key="enable_ipsum",
-        extract_field=0,
     ),
     # Spamhaus DROP/EDROP
     BlocklistSource(
         name="Spamhaus DROP",
         url="https://www.spamhaus.org/drop/drop.txt",
-        enabled_key="enable_spamhaus",
-        comment_char=";",
-        extract_field=0,
-    ),
-    BlocklistSource(
-        name="Spamhaus EDROP",
-        url="https://www.spamhaus.org/drop/edrop.txt",
         enabled_key="enable_spamhaus",
         comment_char=";",
         extract_field=0,
@@ -226,11 +232,6 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_abuse_ch",
     ),
     BlocklistSource(
-        name="SSL Blacklist",
-        url="https://sslbl.abuse.ch/blacklist/sslipblacklist.txt",
-        enabled_key="enable_abuse_ch",
-    ),
-    BlocklistSource(
         name="URLhaus",
         url="https://urlhaus.abuse.ch/downloads/text_online/",
         enabled_key="enable_abuse_ch",
@@ -263,29 +264,9 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_ci_army",
     ),
     BlocklistSource(
-        name="Darklist",
-        url="https://www.darklist.de/raw.php",
-        enabled_key="enable_darklist",
-    ),
-    BlocklistSource(
-        name="Talos",
-        url="https://www.talosintelligence.com/documents/ip-blacklist",
-        enabled_key="enable_talos",
-    ),
-    BlocklistSource(
-        name="Charles Haley",
-        url="https://charles.the-haleys.org/ssh_dico_attack_hdeny_format.php/hostsdeny.txt",
-        enabled_key="enable_charles_haley",
-    ),
-    BlocklistSource(
         name="Botvrij",
         url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
         enabled_key="enable_botvrij",
-    ),
-    BlocklistSource(
-        name="myip.ms",
-        url="https://myip.ms/files/blacklist/general/full_blacklist_database.txt",
-        enabled_key="enable_myip_ms",
     ),
     BlocklistSource(
         name="GreenSnow",
@@ -314,6 +295,56 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://gist.githubusercontent.com/jfqd/4ff7fa70950626a11832a4bc39451c1c/raw",
         enabled_key="enable_scanners",
     ),
+    # AbuseIPDB 99% confidence (via borestad mirror)
+    BlocklistSource(
+        name="AbuseIPDB",
+        url="https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4",
+        enabled_key="enable_abuseipdb",
+    ),
+    # Cybercrime Tracker C2 (FireHOL mirror)
+    BlocklistSource(
+        name="Cybercrime Tracker",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
+        enabled_key="enable_cybercrime_tracker",
+    ),
+    # Monty Security C2 Tracker
+    BlocklistSource(
+        name="Monty Security C2",
+        url="https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt",
+        enabled_key="enable_monty_security_c2",
+    ),
+    # DShield Top Attackers
+    BlocklistSource(
+        name="DShield Top Attackers",
+        url="https://feeds.dshield.org/top10-2.txt",
+        enabled_key="enable_dshield",
+        extract_field=0,
+    ),
+    # VXVault Malware (FireHOL mirror)
+    BlocklistSource(
+        name="VXVault",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset",
+        enabled_key="enable_vxvault",
+    ),
+    # --- Tier 2 Extended Coverage Blocklists ---
+    # IPsum Level 4+ (higher confidence than existing level 3)
+    BlocklistSource(
+        name="IPsum level4",
+        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt",
+        enabled_key="enable_ipsum",
+    ),
+    # Firehol Level 3 (extended 30-day coverage)
+    BlocklistSource(
+        name="Firehol level3",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
+        enabled_key="enable_firehol",
+    ),
+    # Maltrail mass scanners
+    BlocklistSource(
+        name="Maltrail scanners",
+        url="https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        enabled_key="enable_scanners",
+    )
 ]
 
 # Static scanner IPs (Censys)
@@ -378,33 +409,49 @@ def parse_ip_or_network(value: str) -> Optional[str]:
     """
     value = value.strip()
     if not value:
-        return None
+        return (None, None)
 
     try:
-        # Try parsing as network (CIDR)
+        if value.startswith("http"):
+            # Extract IP from URL
+            value = value.replace("https://", "") \
+                .replace("http://", "") \
+                .split("/")[0] \
+                .split(":")[0]
+
+        # Workaround typos in Maltrail: example C91.196.152.28
+        if value.startswith("C"):
+            value = value[1:]
+
+        if "/" not in value:
+            # Parse as single IP
+            ip = ipaddress.ip_address(value)
+            if is_private_or_reserved(ip):
+                return (None, None)
+            if str(ip) in EXCLUDED_IPS:
+                return (None, None)
+            ret = str(ip)
+            if ret.endswith(".0"):
+                value = f"{ret}/24"
+            else:
+                return (ret, None)
+
         if "/" in value:
+            # Try parsing as network (CIDR)
             network = ipaddress.ip_network(value, strict=False)
             # Check if network overlaps with private ranges
             for private in PRIVATE_NETWORKS:
                 try:
                     if network.overlaps(private):
-                        return None
+                        return (None, None)
                 except TypeError:
                     continue
-            return str(network)
-        else:
-            # Parse as single IP
-            ip = ipaddress.ip_address(value)
-            if is_private_or_reserved(ip):
-                return None
-            if str(ip) in EXCLUDED_IPS:
-                return None
-            return str(ip)
+            return (str(network), None)
     except (ValueError, TypeError):
-        return None
+        return (None, value)
 
 
-def extract_ips_from_line(line: str, source: BlocklistSource) -> Generator[str, None, None]:
+def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource, logger: logging.Logger) -> Generator[str, None, None]:
     """
     Extract IP addresses/networks from a line of text.
 
@@ -412,6 +459,7 @@ def extract_ips_from_line(line: str, source: BlocklistSource) -> Generator[str, 
     - Plain IP: 1.2.3.4
     - CIDR: 1.2.3.0/24
     - Tabular: 1.2.3.4<tab>other_data
+    - URLs: http://177.70.102.228:8070/TmpFTP/01/Consulta/2019-03-13/info.zip
     - Commented: # comment
     """
     line = line.strip()
@@ -420,11 +468,9 @@ def extract_ips_from_line(line: str, source: BlocklistSource) -> Generator[str, 
     if not line or line.startswith(source.comment_char):
         return
 
-    # Remove inline comments (both ; and #)
-    if ";" in line:
-        line = line.split(";")[0].strip()
-    if "#" in line and source.comment_char != "#":
-        line = line.split("#")[0].strip()
+    # Remove inline comments
+    if source.comment_char in line:
+        line = line.split(source.comment_char)[0].strip()
 
     # Extract specific field if configured
     if source.extract_field is not None:
@@ -435,9 +481,14 @@ def extract_ips_from_line(line: str, source: BlocklistSource) -> Generator[str, 
     # Try to extract IP/CIDR patterns
     # Handle various separators
     for part in line.replace(",", " ").replace("\t", " ").split():
-        parsed = parse_ip_or_network(part)
+        (parsed, error) = parse_ip_or_network(part)
         if parsed:
             yield parsed
+        if error:
+            if error not in errors.keys():
+                errors[error] = 1
+            else:
+                errors[error] += 1
 
 
 # =============================================================================
@@ -475,11 +526,17 @@ class FetchResult:
     error: Optional[str] = None
 
 
+def log_separator(logger):
+    logger.debug("-" * 10)
+
+
 def fetch_blocklist(
     session: requests.Session,
     source: BlocklistSource,
     timeout: int,
     seen_ips: Set[str],
+    allow_list: list[str],
+    stats: ImportStats,
     logger: logging.Logger,
 ) -> tuple[list[str], FetchResult]:
     """
@@ -503,6 +560,9 @@ def fetch_blocklist(
 
         # Process line by line (streaming)
         # Use iter_lines without decode_unicode to handle encoding ourselves
+        total_ip_cnt = 0
+        ignored_ip_cnt = 0
+        errors = dict()
         for raw_line in response.iter_lines():
             if raw_line:
                 # Decode bytes to string, handling various encodings
@@ -513,16 +573,31 @@ def fetch_blocklist(
                         try:
                             line = raw_line.decode("latin-1")
                         except UnicodeDecodeError:
+                            stats.encoding_errors += 1
                             continue  # Skip unparseable lines
                 else:
                     line = raw_line
 
-                for ip in extract_ips_from_line(line, source):
+                for ip in extract_ips_from_line(line, errors, source, logger):
+                    total_ip_cnt += 1
                     if ip not in seen_ips:
-                        seen_ips.add(ip)
-                        new_ips.append(ip)
+                        if ip in allow_list:
+                            ignored_ip_cnt += 1
+                        else:
+                            seen_ips.add(ip)
+                            new_ips.append(ip)
+        max_cnt = 20
+        for error in errors:
+            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{errors[error]})')
+            max_cnt -= 1
+            if max_cnt == 0:
+                break
+        nb_errors = sum([errors[e] for e in errors.keys()])
+        stats.parse_errors += nb_errors
 
-        logger.debug(f"{source.name}: {len(new_ips)} unique IPs")
+        ignored_ips = f"{ignored_ip_cnt} ignored IPs (allow-list), " if ignored_ip_cnt > 0 else ""
+        error_cnt = f", {nb_errors} parse errors" if len(errors) > 0 else ""
+        logger.debug(f"{source.name}: {total_ip_cnt} total IPs{error_cnt}, {ignored_ips}{len(new_ips)} unique new IPs")
         return new_ips, FetchResult(source=source, success=True, ip_count=len(new_ips))
 
     except requests.RequestException as e:
@@ -677,8 +752,9 @@ class CrowdSecLAPI:
                         value = decision.get("value", "")
                         if value:
                             existing.add(value)
-
-            self.logger.debug(f"Found {len(existing)} existing decisions")
+            else:
+                self.logger.error(f"Error calling {self.base_url}/v1/decisions")
+                self.logger.error(f"Response: {response}")
 
         except requests.RequestException as e:
             self.logger.warning(f"Failed to fetch existing decisions: {e}")
@@ -707,11 +783,7 @@ class CrowdSecLAPI:
         if not ips:
             return 0, 0
 
-        import socket
         from datetime import datetime, timezone
-
-        # Get machine name for alert source
-        machine_id = socket.gethostname()
 
         # Build decisions for this alert
         decisions = []
@@ -758,7 +830,7 @@ class CrowdSecLAPI:
         if not headers:
             self.logger.error(
                 "Machine credentials required for writing decisions. "
-                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD"
+                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE"
             )
             return 0, len(ips)
 
@@ -793,11 +865,19 @@ class ImportStats:
     sources_ok: int = 0
     sources_failed: int = 0
     total_ips_fetched: int = 0
+    encoding_errors: int = 0
+    parse_errors: int = 0
     new_ips: int = 0
     imported_ok: int = 0
     imported_failed: int = 0
     existing_skipped: int = 0
     duration_seconds: float = 0.0
+
+
+def read_password_file(password_file: str) -> str:
+    with open(password_file, 'r') as f:
+        lines = f.readlines()
+        return [l.replace("password: ", "").strip() for l in lines if len(lines) == 1 or l.startswith("password: ")][0]
 
 
 def run_import(config: Config, logger: logging.Logger) -> ImportStats:
@@ -812,6 +892,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     logger.info(f"CrowdSec Blocklist Import v{__version__}")
     logger.info(f"Decision duration: {config.decision_duration}")
     logger.info(f"LAPI URL: {config.lapi_url}")
+    logger.info(f"Machine ID: {config.machine_id}")
 
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
@@ -819,12 +900,22 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Create HTTP session with retry logic
     session = create_http_session(config.max_retries)
 
+    lapi_key = config.lapi_key
+    if not lapi_key and config.lapi_key_file:
+        lapi_key = read_password_file(config.lapi_key_file)
+        logger.debug(f"Read lapi_key from {config.lapi_key_file}")
+
+    machine_password = config.machine_password
+    if not machine_password and config.machine_password_file:
+        machine_password = read_password_file(config.machine_password_file)
+        logger.debug(f"Read machine_password from {config.machine_password_file}")
+
     # Initialize LAPI client
     lapi = CrowdSecLAPI(
         base_url=config.lapi_url,
-        api_key=config.lapi_key,
+        api_key=lapi_key,
         machine_id=config.machine_id,
-        machine_password=config.machine_password,
+        machine_password=machine_password,
         session=session,
         logger=logger,
     )
@@ -832,11 +923,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Check LAPI connectivity (unless dry run)
     if not config.dry_run:
         # Need either bouncer key (for reading) or machine creds (for writing)
-        if not config.lapi_key and not (config.machine_id and config.machine_password):
+        if not lapi_key and not (config.machine_id and machine_password):
             logger.error(
                 "Authentication required. Set either:\n"
-                "  - CROWDSEC_LAPI_KEY (bouncer key for read-only)\n"
-                "  - CROWDSEC_MACHINE_ID + CROWDSEC_MACHINE_PASSWORD (for full access)"
+                "  - CROWDSEC_LAPI_KEY or CROWDSEC_LAPI_KEY_FILE (bouncer key for read-only)\n"
+                "  - CROWDSEC_MACHINE_ID + CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE (for full access)"
             )
             return stats
 
@@ -844,7 +935,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if not lapi.can_write():
             logger.error(
                 "Machine credentials required for writing decisions.\n"
-                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD.\n"
+                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE.\n"
                 "Get these from: cscli machines list (or register a new machine)"
             )
             return stats
@@ -871,47 +962,68 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     for source in BLOCKLIST_SOURCES:
         if getattr(config, source.enabled_key, True):
             enabled_sources.append(source)
+    if config.custom_block_lists is not None:
+        i = 0
+        for c in config.custom_block_lists:
+            if c:
+                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", c, "custom_blocklists"))
+                i += 1
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
     # Process blocklists and batch import
     batch: list[str] = []
 
-    def flush_batch() -> None:
+    def log_batch_stats(ok: int, failed: int, batch_cnt: int):
+        if ok > 0:
+            logger.debug(f"Imported {ok} IPs in {batch_cnt} batches")
+        if failed > 0:
+            logger.warning(f"Failed to import {failed} IPs")
+
+    def flush_batch(sourceName: str) -> None:
         """Import the current batch to CrowdSec."""
         nonlocal batch
         if not batch:
-            return
+            return (0, 0)
 
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(batch)} IPs")
             stats.imported_ok += len(batch)
+            ok = len(batch)
+            failed = 0
         else:
             ok, failed = lapi.add_decisions(
                 ips=batch,
                 duration=config.decision_duration,
-                reason=config.decision_reason,
+                reason=f"{config.decision_reason} ({sourceName})",
                 decision_type=config.decision_type,
                 origin=config.decision_origin,
-                scenario=config.decision_scenario,
+                scenario=f"{config.decision_scenario} ({sourceName})",
             )
             stats.imported_ok += ok
             stats.imported_failed += failed
-            if ok > 0:
-                logger.debug(f"Imported batch of {ok} IPs")
-            if failed > 0:
-                logger.warning(f"Failed to import {failed} IPs")
+            # if ok > 0:
+            #     logger.debug(f"Imported batch of {ok} IPs")
+            # if failed > 0:
+            #     logger.warning(f"Failed to import {failed} IPs")
 
         batch = []
+        return (ok, failed)
 
     # Process each blocklist source
     for source in enabled_sources:
+        source_ok = 0
+        source_failed = 0
+        batch_cnt = 1
+        log_separator(logger)
         # Fetch blocklist and get results
         new_ips, result = fetch_blocklist(
             session=session,
             source=source,
             timeout=config.fetch_timeout,
             seen_ips=seen_ips,
+            allow_list=config.allow_list,
+            stats=stats,
             logger=logger,
         )
 
@@ -929,9 +1041,19 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             batch.append(ip)
             # Flush batch when full
             if len(batch) >= config.batch_size:
-                flush_batch()
+                batch_cnt += 1
+                ok, failed = flush_batch(source.name)
+                source_ok += ok
+                source_failed += failed
+
+        # Flush any remaining IPs
+        ok, failed = flush_batch(source.name)
+        source_ok += ok
+        source_failed += failed
+        log_batch_stats(source_ok, source_failed, batch_cnt)
 
     # Add static scanner IPs
+    log_separator(logger)
     if config.enable_scanners:
         logger.debug("Adding static scanner IPs (Censys)")
         for cidr in STATIC_SCANNER_IPS:
@@ -942,8 +1064,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 stats.total_ips_fetched += 1
         stats.sources_ok += 1
 
-    # Flush any remaining IPs
-    flush_batch()
+        source_ok, source_failed = flush_batch("Censys")
+        log_batch_stats(source_ok, source_failed, 1)
 
     stats.duration_seconds = time.time() - start_time
 
@@ -957,6 +1079,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         )
 
     # Log summary
+    log_separator(logger)
     logger.info(
         f"Sources: {stats.sources_ok} successful, "
         f"{stats.sources_failed} unavailable"
@@ -972,6 +1095,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         )
         if stats.imported_failed > 0:
             logger.warning(f"Failed to import {stats.imported_failed} IPs")
+    if stats.parse_errors:
+        logger.warning(f"{stats.parse_errors} parsing errors")
+    if stats.encoding_errors:
+        logger.warning(f"{stats.encoding_errors} encoding errors")
 
     logger.info(f"Completed in {stats.duration_seconds:.1f}s")
 
@@ -1004,16 +1131,17 @@ def send_telemetry(
 # CLI
 # =============================================================================
 
-def setup_logging(level: str) -> logging.Logger:
+def setup_logging(config: Config) -> logging.Logger:
     """Configure logging with structured output."""
     logger = logging.getLogger("blocklist-import")
-    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logger.level)
 
+    format = "[%(asctime)s] [%(levelname)s] %(message)s" if config.log_timestamps else "[%(levelname)s] %(message)s"
     formatter = logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] %(message)s",
+        format,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     handler.setFormatter(formatter)
@@ -1029,19 +1157,19 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment Variables:
-  CROWDSEC_LAPI_URL      CrowdSec LAPI URL (default: http://localhost:8080)
-  CROWDSEC_LAPI_KEY      CrowdSec LAPI key (required)
-  DECISION_DURATION      How long decisions last (default: 24h)
-  BATCH_SIZE             IPs per batch (default: 1000)
-  LOG_LEVEL              DEBUG, INFO, WARN, ERROR (default: INFO)
-  DRY_RUN                Set to true for dry run mode
-  TELEMETRY_ENABLED      Set to false to disable telemetry
+  CROWDSEC_LAPI_URL        CrowdSec LAPI URL (default: http://localhost:8080)
+  CROWDSEC_LAPI_KEY[_FILE] CrowdSec LAPI key / key file (required)
+  DECISION_DURATION        How long decisions last (default: 24h)
+  BATCH_SIZE               IPs per batch (default: 1000)
+  LOG_LEVEL                DEBUG, INFO, WARN, ERROR (default: INFO)
+  DRY_RUN                  Set to true for dry run mode
+  TELEMETRY_ENABLED        Set to false to disable telemetry
 
-  ENABLE_IPSUM           Enable IPsum blocklist (default: true)
-  ENABLE_SPAMHAUS        Enable Spamhaus DROP/EDROP (default: true)
-  ENABLE_BLOCKLIST_DE    Enable Blocklist.de feeds (default: true)
-  ENABLE_FIREHOL         Enable Firehol level1/2 (default: true)
-  ENABLE_ABUSE_CH        Enable Abuse.ch feeds (default: true)
+  ENABLE_IPSUM             Enable IPsum blocklist (default: true)
+  ENABLE_SPAMHAUS          Enable Spamhaus DROP/EDROP (default: true)
+  ENABLE_BLOCKLIST_DE      Enable Blocklist.de feeds (default: true)
+  ENABLE_FIREHOL           Enable Firehol levels 1/2/3 (default: true)
+  ENABLE_ABUSE_CH          Enable Abuse.ch feeds (default: true)
   ... and more (see README.md)
 
 Examples:
@@ -1120,7 +1248,7 @@ def main() -> int:
         config.batch_size = args.batch_size
 
     # Setup logging
-    logger = setup_logging(config.log_level)
+    logger = setup_logging(config)
 
     # Run import
     try:

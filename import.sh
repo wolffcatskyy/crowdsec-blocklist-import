@@ -165,7 +165,6 @@ show_source_overrides() {
     local all_sources=(
         "IPsum"
         "Spamhaus DROP"
-        "Spamhaus EDROP"
         "Blocklist.de all"
         "Blocklist.de SSH"
         "Blocklist.de Apache"
@@ -173,18 +172,13 @@ show_source_overrides() {
         "Firehol level1"
         "Firehol level2"
         "Feodo Tracker"
-        "SSL Blacklist"
         "URLhaus"
         "Emerging Threats"
         "Binary Defense"
         "Bruteforce Blocker"
         "DShield"
         "CI Army"
-        "Darklist"
-        "Talos"
-        "Charles Haley"
         "Botvrij"
-        "myip.ms"
         "GreenSnow"
         "StopForumSpam"
         "Tor exit nodes"
@@ -827,11 +821,6 @@ main() {
         "spamhaus_drop.txt" \
         "grep -v '^;' | awk '{print \$1}' | cut -d';' -f1"
 
-    fetch_list "Spamhaus EDROP" \
-        "https://www.spamhaus.org/drop/edrop.txt" \
-        "spamhaus_edrop.txt" \
-        "grep -v '^;' | awk '{print \$1}' | cut -d';' -f1"
-
     # Blocklist.de
     fetch_list "Blocklist.de all" \
         "https://lists.blocklist.de/lists/all.txt" \
@@ -870,11 +859,6 @@ main() {
         "feodo.txt" \
         "grep -v '^#'"
 
-    fetch_list "SSL Blacklist" \
-        "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt" \
-        "sslbl.txt" \
-        "grep -v '^#'"
-
     fetch_list "URLhaus" \
         "https://urlhaus.abuse.ch/downloads/text_online/" \
         "urlhaus.txt" \
@@ -906,30 +890,10 @@ main() {
         "ciarm.txt" \
         "grep -v '^#'"
 
-    fetch_list "Darklist" \
-        "https://www.darklist.de/raw.php" \
-        "darklist.txt" \
-        "grep -v '^#'"
-
-    fetch_list "Talos" \
-        "https://www.talosintelligence.com/documents/ip-blacklist" \
-        "talos.txt" \
-        "grep -v '^#'"
-
-    fetch_list "Charles Haley" \
-        "https://charles.the-haleys.org/ssh_dico_attack_hdeny_format.php/hostsdeny.txt" \
-        "haley.txt" \
-        "grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}'"
-
     fetch_list "Botvrij" \
         "https://www.botvrij.eu/data/ioclist.ip-dst.raw" \
         "botvrij.txt" \
         "grep -v '^#'"
-
-    fetch_list "myip.ms" \
-        "https://myip.ms/files/blacklist/general/full_blacklist_database.txt" \
-        "myip.txt" \
-        "grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'"
 
     fetch_list "GreenSnow" \
         "https://blocklist.greensnow.co/greensnow.txt" \

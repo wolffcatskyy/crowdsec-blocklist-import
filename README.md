@@ -11,7 +11,7 @@ Memory-efficient Python 3.11+ implementation of [crowdsec-blocklist-import](http
 - **Automatic Deduplication**: Skips existing CrowdSec decisions
 - **Retry Logic**: Exponential backoff for failed requests
 - **Type Hints**: Full type annotations for IDE support
-- **28+ Blocklists**: Same sources as the bash version
+- **30+ Blocklists**: Same sources as the bash version
 - **Per-feed Control**: Enable/disable individual blocklist sources
 
 ## Quick Start
@@ -70,7 +70,7 @@ python blocklist_import.py --dry-run
 
 ## CLI Options
 
-```
+```text
 usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
                            [--lapi-key LAPI_KEY] [--duration DURATION]
                            [--batch-size BATCH_SIZE]
@@ -86,6 +86,14 @@ options:
   --batch-size SIZE     IPs per import batch
 ```
 
+## Removing all blocked IPs
+
+All added decisions have their origin set to `blocklist-import`, so they can be cleared by running:
+
+```bash
+cscli decisions delete --origin blocklist-import
+```
+
 ## Environment Variables
 
 ### Required
@@ -93,19 +101,28 @@ options:
 | Variable | Description |
 |----------|-------------|
 | `CROWDSEC_LAPI_URL` | CrowdSec LAPI URL (default: `http://localhost:8080`) |
-| `CROWDSEC_LAPI_KEY` | Bouncer API key for reading decisions |
+| `CROWDSEC_LAPI_KEY` or `CROWDSEC_LAPI_KEY_FILE` | Bouncer API key / key file for reading decisions |
 | `CROWDSEC_MACHINE_ID` | Machine ID for writing decisions |
-| `CROWDSEC_MACHINE_PASSWORD` | Machine password for authentication |
+| `CROWDSEC_MACHINE_PASSWORD` or `CROWDSEC_MACHINE_PASSWORD_FILE` | Machine password / password file for authentication |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ALLOWLIST` | `` | Comma-separated list of blocklist row data to ignore |
 | `DECISION_DURATION` | `24h` | How long decisions last |
+| `LOG_TIMESTAMPS` | `true` | Include timestamps in logs |
+| `DECISION_REASON` | `external_blocklist` | The decision identifier |
+| `DECISION_TYPE` | `ban` | The type of decision applied |
+| `DECISION_ORIGIN` | `blocklist-import` | The decision origin name |
+| `DECISION_SCENARIO` | `external/blocklist` | The decision scenario name |
 | `BATCH_SIZE` | `1000` | IPs per import batch |
+| `FETCH_TIMEOUT` | `60` | The fetch timeout in seconds |
+| `MAX_RETRIES` | `3` | How many times to retry fetching in case of error |
 | `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARN, ERROR |
 | `DRY_RUN` | `false` | Set to true for dry run |
 | `TELEMETRY_ENABLED` | `true` | Anonymous usage telemetry |
+| `TELEMETRY_URL` | `https://bouncer-telemetry.ms2738.workers.dev/ping` | Anonymous usage telemetry URL |
 
 ### Blocklist Toggles
 
@@ -116,22 +133,22 @@ All blocklists are enabled by default. Set to `false` to disable:
 | `ENABLE_IPSUM` | IPsum (aggregated threat intel) |
 | `ENABLE_SPAMHAUS` | Spamhaus DROP/EDROP |
 | `ENABLE_BLOCKLIST_DE` | Blocklist.de (all feeds) |
-| `ENABLE_FIREHOL` | Firehol level1/2 |
-| `ENABLE_ABUSE_CH` | Feodo, SSL Blacklist, URLhaus |
+| `ENABLE_FIREHOL` | Firehol levels 1/2/3 |
+| `ENABLE_ABUSE_CH` | Feodo, URLhaus |
 | `ENABLE_EMERGING_THREATS` | Emerging Threats |
 | `ENABLE_BINARY_DEFENSE` | Binary Defense |
 | `ENABLE_BRUTEFORCE_BLOCKER` | Bruteforce Blocker |
 | `ENABLE_DSHIELD` | DShield |
 | `ENABLE_CI_ARMY` | CI Army |
-| `ENABLE_DARKLIST` | Darklist |
-| `ENABLE_TALOS` | Talos Intelligence |
-| `ENABLE_CHARLES_HALEY` | Charles Haley |
 | `ENABLE_BOTVRIJ` | Botvrij |
-| `ENABLE_MYIP_MS` | myip.ms |
 | `ENABLE_GREENSNOW` | GreenSnow |
 | `ENABLE_STOPFORUMSPAM` | StopForumSpam |
 | `ENABLE_TOR` | Tor exit nodes |
-| `ENABLE_SCANNERS` | Shodan/Censys |
+| `ENABLE_SCANNERS` | Shodan/Censys/Maltrail |
+| `ENABLE_ABUSE_IPDB` | Abuse IPDB |
+| `ENABLE_CYBERCRIME_TRACKER` | Cybercrime tracker |
+| `ENABLE_MONTY_SECURITY_C2` | Monty Security C2 |
+| `ENABLE_VXVAULT` | VX Vault |
 
 ## Authentication
 
@@ -141,8 +158,15 @@ CrowdSec LAPI uses two types of authentication:
 2. **Machine Credentials** (JWT token via `/watchers/login`) - Full access including writing alerts/decisions
 
 This tool requires both:
+
 - Bouncer key for checking existing decisions (deduplication)
 - Machine credentials for writing new decisions via the `/alerts` endpoint
+
+## Allow-lists
+
+The `ALLOWLIST` environment variable can be used to specify block-list rows to ignore.
+
+If the original row to ignore ends contains comment, it should not be included in the allow-list item
 
 ## Memory Efficiency
 
@@ -178,6 +202,7 @@ services:
 ```
 
 Schedule with:
+
 ```bash
 0 4 * * * docker compose -f /path/to/compose.yaml up --abort-on-container-exit
 ```
