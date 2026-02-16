@@ -1141,4 +1141,127 @@ EOF
     info "Done!"
 }
 
+# --- CLI Argument Handling (closes #13) ---
+
+# List all blocklist sources with their enable variable names
+list_sources() {
+    local all_sources=(
+        "IPsum"
+        "Spamhaus DROP"
+        "Blocklist.de all"
+        "Blocklist.de SSH"
+        "Blocklist.de Apache"
+        "Blocklist.de mail"
+        "Firehol level1"
+        "Firehol level2"
+        "Feodo Tracker"
+        "URLhaus"
+        "Emerging Threats"
+        "Binary Defense"
+        "Bruteforce Blocker"
+        "DShield"
+        "CI Army"
+        "Botvrij"
+        "GreenSnow"
+        "StopForumSpam"
+        "Tor exit nodes"
+        "Tor (dan.me.uk)"
+        "Shodan scanners"
+        "Censys"
+        "AbuseIPDB"
+        "Cybercrime Tracker"
+        "Monty Security C2"
+        "DShield Top Attackers"
+        "VXVault"
+        "IPsum level4"
+        "Firehol level3"
+        "Maltrail scanners"
+    )
+
+    echo "Available blocklist sources (${#all_sources[@]} built-in):"
+    echo ""
+    printf "  %-25s %-35s %s\n" "Variable" "Source" "Status"
+    printf "  %-25s %-35s %s\n" "-------------------------" "-----------------------------------" "--------"
+
+    for source in "${all_sources[@]}"; do
+        local var_name="ENABLE_$(normalize_source_name "$source")"
+        local value="${!var_name:-true}"
+        local status="enabled"
+        [ "$value" = "false" ] && status="DISABLED"
+        printf "  %-25s %-35s %s\n" "$var_name" "$source" "$status"
+    done
+}
+
+show_help() {
+    cat << HELP
+crowdsec-blocklist-import v$VERSION
+Imports 28+ public threat feeds into CrowdSec as ban decisions.
+
+Usage: import.sh [OPTIONS]
+
+Options:
+  --help, -h          Show this help message
+  --version, -v       Show version number
+  --list-sources      List all available blocklist sources
+  --dry-run           Run without making changes (same as DRY_RUN=true)
+
+Environment variables:
+  CROWDSEC_CONTAINER       CrowdSec container name (default: crowdsec)
+  CROWDSEC_LAPI_URL        CrowdSec LAPI URL (for LAPI mode)
+  CROWDSEC_MACHINE_ID      Machine ID for LAPI authentication
+  CROWDSEC_MACHINE_PASSWORD Machine password for LAPI authentication
+  DECISION_DURATION        How long bans last (default: 24h)
+  DRY_RUN                  Set to "true" for dry-run mode
+  MODE                     "lapi", "docker", "native", or "auto" (default: auto)
+  LOG_LEVEL                DEBUG, INFO, WARN, ERROR (default: INFO)
+  MAX_DECISIONS            Maximum total decisions (default: 40000, 0=unlimited)
+  CUSTOM_BLOCKLISTS        Comma-separated URLs of additional blocklists
+  ALLOWLIST                Comma-separated IPs/CIDRs to exclude
+  ALLOWLIST_URL            URL to fetch allow-list from
+  ALLOWLIST_FILE           Local file path containing allow-list
+  TELEMETRY_ENABLED        Set to "false" to disable anonymous telemetry
+
+Per-source toggles (set to "false" to disable):
+  ENABLE_IPSUM, ENABLE_SPAMHAUS_DROP, ENABLE_BLOCKLIST_DE_ALL, ...
+  (use --list-sources to see all available toggles)
+
+Examples:
+  # Basic usage with Docker
+  docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro \\
+    ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+
+  # LAPI mode (no Docker socket needed)
+  CROWDSEC_LAPI_URL=http://crowdsec:8080 \\
+  CROWDSEC_MACHINE_ID=blocklist-import \\
+  CROWDSEC_MACHINE_PASSWORD=secret ./import.sh
+
+  # Dry run to see what would be imported
+  ./import.sh --dry-run
+
+  # Disable specific sources
+  ENABLE_TOR_EXIT_NODES=false ENABLE_CENSYS=false ./import.sh
+
+Full documentation: https://github.com/wolffcatskyy/crowdsec-blocklist-import
+HELP
+}
+
+# Parse command-line arguments
+case "${1:-}" in
+    --version|-v)
+        echo "crowdsec-blocklist-import v$VERSION"
+        exit 0
+        ;;
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --list-sources)
+        list_sources
+        exit 0
+        ;;
+    --dry-run)
+        DRY_RUN=true
+        ;;
+esac
+
 main "$@"
