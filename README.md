@@ -415,6 +415,14 @@ mypy blocklist_import.py
 ruff check blocklist_import.py
 ```
 
+## Contributors
+
+A huge thanks to those who have helped make this project better!
+
+- **[@gaelj](https://github.com/gaelj)** - Major contributor to v3.3.0, implementing Docker secrets support (`_FILE` env vars), allowlist functionality, CLI enhancements, Prometheus metrics, environment validation with typo detection, and adding multiple new blocklist sources. [PR #30](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/30)
+
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
