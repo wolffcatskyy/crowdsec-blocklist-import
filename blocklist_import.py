@@ -44,7 +44,138 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.2.0"
+__version__ = "3.3.0"
+
+# =============================================================================
+# Environment Variable Validation
+# =============================================================================
+
+# All valid ENABLE_* environment variable names (canonical list)
+VALID_ENABLE_VARS: set[str] = {
+    "ENABLE_IPSUM",
+    "ENABLE_SPAMHAUS",
+    "ENABLE_BLOCKLIST_DE",
+    "ENABLE_FIREHOL",
+    "ENABLE_ABUSE_CH",
+    "ENABLE_EMERGING_THREATS",
+    "ENABLE_BINARY_DEFENSE",
+    "ENABLE_BRUTEFORCE_BLOCKER",
+    "ENABLE_DSHIELD",
+    "ENABLE_CI_ARMY",
+    "ENABLE_BOTVRIJ",
+    "ENABLE_GREENSNOW",
+    "ENABLE_STOPFORUMSPAM",
+    "ENABLE_TOR",
+    "ENABLE_SCANNERS",
+    "ENABLE_ABUSE_IPDB",
+    "ENABLE_CYBERCRIME_TRACKER",
+    "ENABLE_MONTY_SECURITY_C2",
+    "ENABLE_VXVAULT",
+}
+
+# Valid boolean string values (case-insensitive)
+VALID_BOOL_VALUES: set[str] = {"true", "false", "1", "0", "yes", "no", "on", "off"}
+
+
+class EnvValidationError(Exception):
+    """Raised when environment variable validation fails."""
+    pass
+
+
+def validate_bool_value(var_name: str, value: str) -> tuple[bool, Optional[str]]:
+    """
+    Validate that a value is a valid boolean string.
+
+    Returns (is_valid, error_message).
+    """
+    if value.lower() in VALID_BOOL_VALUES:
+        return True, None
+
+    return False, (
+        f"Invalid value for {var_name}: '{value}'\n"
+        f"  Expected one of: true, false, 1, 0, yes, no, on, off (case-insensitive)"
+    )
+
+
+def find_similar_vars(unknown_var: str, valid_vars: set[str]) -> list[str]:
+    """
+    Find similar variable names for typo suggestions.
+
+    Uses simple substring matching and edit distance approximation.
+    """
+    suggestions = []
+    unknown_lower = unknown_var.lower()
+
+    for valid in valid_vars:
+        valid_lower = valid.lower()
+
+        # Exact substring match (missing/extra characters)
+        if unknown_lower in valid_lower or valid_lower in unknown_lower:
+            suggestions.append(valid)
+            continue
+
+        # Check for common typos (swapped characters, missing underscore, etc.)
+        # Remove underscores and compare
+        unknown_compact = unknown_lower.replace("_", "")
+        valid_compact = valid_lower.replace("_", "")
+
+        if unknown_compact == valid_compact:
+            suggestions.append(valid)
+            continue
+
+        # Check if most characters match (simple similarity)
+        common = sum(1 for c in unknown_compact if c in valid_compact)
+        if common >= len(valid_compact) * 0.7:
+            suggestions.append(valid)
+
+    return suggestions
+
+
+def validate_enable_env_vars(logger: Optional[logging.Logger] = None) -> tuple[bool, list[str]]:
+    """
+    Validate all ENABLE_* environment variables.
+
+    Checks:
+    1. All ENABLE_* vars have valid boolean values
+    2. Warns about unknown ENABLE_* vars (possible typos)
+
+    Returns (is_valid, list_of_errors).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for var_name, value in os.environ.items():
+        if not var_name.startswith("ENABLE_"):
+            continue
+
+        # Check if it's a known variable
+        if var_name not in VALID_ENABLE_VARS:
+            suggestions = find_similar_vars(var_name, VALID_ENABLE_VARS)
+
+            if suggestions:
+                suggestion_text = ", ".join(suggestions[:3])
+                warnings.append(
+                    f"Unknown environment variable: {var_name}={value}\n"
+                    f"  Did you mean: {suggestion_text}?"
+                )
+            else:
+                warnings.append(
+                    f"Unknown environment variable: {var_name}={value}\n"
+                    f"  This variable will be ignored. Check spelling or see available options below."
+                )
+        else:
+            # Validate the boolean value
+            is_valid, error = validate_bool_value(var_name, value)
+            if not is_valid:
+                errors.append(error)
+
+    # Log warnings (don't fail, just warn)
+    if logger and warnings:
+        for warning in warnings:
+            logger.warning(warning)
+
+    return len(errors) == 0, errors
+
 
 # =============================================================================
 # Configuration
@@ -354,6 +485,32 @@ STATIC_SCANNER_IPS: list[str] = [
     "74.120.14.0/24",
     "167.248.133.0/24",
 ]
+
+
+def list_blocklist_sources(logger: logging.Logger) -> None:
+    """Print a formatted list of all available blocklist sources."""
+    logger.info("Available blocklist sources:")
+    logger.info("")
+
+    # Group sources by their enable key
+    sources_by_key: dict[str, list[str]] = {}
+    for source in BLOCKLIST_SOURCES:
+        env_var = source.enabled_key.upper()
+        if env_var not in sources_by_key:
+            sources_by_key[env_var] = []
+        sources_by_key[env_var].append(source.name)
+
+    # Print each group
+    for env_var in sorted(sources_by_key.keys()):
+        sources = sources_by_key[env_var]
+        current_value = os.getenv(env_var, "true").lower()
+        status = "enabled" if current_value in ("true", "1", "yes", "on") else "disabled"
+
+        logger.info(f"  {env_var} ({status}):")
+        for source in sources:
+            logger.info(f"    - {source}")
+
+    logger.info("")
 
 
 # =============================================================================
@@ -1179,8 +1336,18 @@ Examples:
   # Dry run to see what would be imported
   ./blocklist_import.py --dry-run
 
+  # Validate configuration without running
+  ./blocklist_import.py --validate
+
+  # List all available blocklist sources
+  ./blocklist_import.py --list-sources
+
   # Debug mode with custom duration
   LOG_LEVEL=DEBUG DECISION_DURATION=48h ./blocklist_import.py
+
+Note: ENABLE_* variables are validated at startup. Invalid values will
+cause the program to exit with an error. Unknown ENABLE_* variables
+(possible typos) will generate warnings with suggestions.
 """,
     )
 
@@ -1223,6 +1390,18 @@ Examples:
         help="Batch size for imports (overrides BATCH_SIZE)",
     )
 
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate configuration and exit without running import",
+    )
+
+    parser.add_argument(
+        "--list-sources",
+        action="store_true",
+        help="List all available blocklist sources and exit",
+    )
+
     return parser.parse_args()
 
 
@@ -1249,6 +1428,34 @@ def main() -> int:
 
     # Setup logging
     logger = setup_logging(config)
+
+    # Handle --list-sources flag
+    if args.list_sources:
+        logger.info(f"CrowdSec Blocklist Import v{__version__}")
+        list_blocklist_sources(logger)
+        return 0
+
+    # Validate ENABLE_* environment variables
+    is_valid, errors = validate_enable_env_vars(logger)
+
+    if not is_valid:
+        logger.error("Configuration validation failed:")
+        logger.error("")
+        for error in errors:
+            for line in error.split("\n"):
+                logger.error(f"  {line}")
+        logger.error("")
+        logger.error("Fix the above errors and try again.")
+        logger.error("Use --list-sources to see all valid ENABLE_* variables.")
+        return 1
+
+    # Handle --validate flag
+    if args.validate:
+        logger.info(f"CrowdSec Blocklist Import v{__version__}")
+        logger.info("Configuration validation passed!")
+        logger.info("")
+        list_blocklist_sources(logger)
+        return 0
 
     # Run import
     try:

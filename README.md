@@ -73,7 +73,8 @@ python blocklist_import.py --dry-run
 ```text
 usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
                            [--lapi-key LAPI_KEY] [--duration DURATION]
-                           [--batch-size BATCH_SIZE]
+                           [--batch-size BATCH_SIZE] [--validate]
+                           [--list-sources]
 
 options:
   -h, --help            show this help message and exit
@@ -84,6 +85,46 @@ options:
   --lapi-key LAPI_KEY   CrowdSec LAPI key (bouncer)
   --duration DURATION   decision duration (e.g., 24h, 48h)
   --batch-size SIZE     IPs per import batch
+  --validate            validate configuration and exit
+  --list-sources        list all available blocklist sources
+```
+
+## Environment Variable Validation
+
+The tool validates all `ENABLE_*` environment variables at startup:
+
+1. **Value validation**: All `ENABLE_*` variables must be valid boolean strings (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`)
+2. **Typo detection**: Unknown `ENABLE_*` variables generate warnings with suggestions for similar valid names
+
+### Validation Examples
+
+```bash
+# Validate configuration without running import
+./blocklist_import.py --validate
+
+# List all available blocklist sources and their status
+./blocklist_import.py --list-sources
+```
+
+### Error Messages
+
+Invalid values will cause the program to exit with a clear error message:
+
+```text
+[ERROR] Configuration validation failed:
+[ERROR]
+[ERROR]   Invalid value for ENABLE_IPSUM: 'maybe'
+[ERROR]     Expected one of: true, false, 1, 0, yes, no, on, off (case-insensitive)
+[ERROR]
+[ERROR] Fix the above errors and try again.
+[ERROR] Use --list-sources to see all valid ENABLE_* variables.
+```
+
+Typos in variable names generate warnings but don't stop execution:
+
+```text
+[WARNING] Unknown environment variable: ENABLE_IPSOM=false
+[WARNING]   Did you mean: ENABLE_IPSUM?
 ```
 
 ## Removing all blocked IPs
