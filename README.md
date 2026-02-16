@@ -70,6 +70,27 @@ python blocklist_import.py --dry-run
 
 ## CLI Options
 
+### Bash Script (import.sh)
+
+```text
+Usage: import.sh [OPTIONS]
+
+Options:
+  --help, -h          Show help message and exit
+  --version, -v       Show version number and exit
+  --list-sources      List all available blocklist sources with their toggle variables
+  --dry-run           Run without making changes (same as DRY_RUN=true)
+
+Examples:
+  ./import.sh --version           # Show version
+  ./import.sh --help              # Show help
+  ./import.sh --list-sources      # List all 30 blocklist sources
+  ./import.sh --dry-run           # Preview what would be imported
+  ENABLE_TOR_EXIT_NODES=false ./import.sh  # Run with Tor sources disabled
+```
+
+### Python Script (blocklist_import.py)
+
 ```text
 usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
                            [--lapi-key LAPI_KEY] [--duration DURATION]
