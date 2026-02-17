@@ -1191,13 +1191,23 @@ class ImportStats:
 
 
 def read_secret_file(file_path: str) -> str:
-    """Read a secret from a file, stripping whitespace/newlines.
+    """Read a secret from a file, supporting multiple formats.
 
-    This follows the Docker secrets pattern where secrets are mounted
-    as files (typically at /run/secrets/<name>) containing just the value.
+    Supports:
+    - Docker secrets pattern: single line with just the password
+    - CrowdSec credentials: YAML with 'password: <value>' line
     """
     with open(file_path, 'r') as f:
-        return f.read().strip()
+        lines = f.readlines()
+        # Single line = plain password (Docker secrets style)
+        if len(lines) == 1:
+            return lines[0].strip()
+        # Multi-line = look for 'password: ' prefix (CrowdSec YAML style)
+        for line in lines:
+            if line.strip().startswith('password:'):
+                return line.replace('password:', '', 1).strip()
+        # Fallback: return entire content stripped
+        return ''.join(lines).strip()
 
 
 def run_import(config: Config, logger: logging.Logger) -> ImportStats:
