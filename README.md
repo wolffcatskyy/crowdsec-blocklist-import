@@ -432,14 +432,8 @@ MIT License - see [LICENSE](LICENSE)
 Remove specific IPs or CIDRs from blocklists before import:
 
 ```bash
-# Inline allow-list
+# Inline allow-list (comma-separated)
 -e ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
-
-# From URL
--e ALLOWLIST_URL="https://example.com/my-allowlist.txt"
-
-# From file
--e ALLOWLIST_FILE="/path/to/allowlist.txt"
 ```
 
-Allow-list format: One IP or CIDR per line, `#` for comments.
+> **Note:** URL-based (`ALLOWLIST_URL`) and file-based (`ALLOWLIST_FILE`) allowlists are planned for a future release. Currently only the inline `ALLOWLIST` variable is supported.
