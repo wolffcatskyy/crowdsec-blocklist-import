@@ -2,6 +2,8 @@
 
 Memory-efficient Python 3.11+ implementation of [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) using the LAPI HTTP API directly.
 
+[![NixOS packaging](https://img.shields.io/badge/NixOS-packaging%20in%20progress-5277C3?logo=nixos&logoColor=white)](https://github.com/NixOS/nixpkgs/pull/486054)
+
 ## Features
 
 - **LAPI Mode Only**: Direct HTTP API calls, no Docker socket needed
@@ -110,6 +112,17 @@ python blocklist_import.py
 
 # Or dry-run first
 python blocklist_import.py --dry-run
+```
+
+### NixOS
+
+A NixOS package and module is being packaged in [nixpkgs#486054](https://github.com/NixOS/nixpkgs/pull/486054). Once merged, install with:
+
+```nix
+services.crowdsec-blocklist-import = {
+  enable = true;
+  # Configuration options available — see the NixOS module for details
+};
 ```
 
 ## CLI Options
