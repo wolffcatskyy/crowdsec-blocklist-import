@@ -28,7 +28,6 @@ import ipaddress
 import logging
 import os
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from typing import Generator, Optional, Set
@@ -39,12 +38,7 @@ from urllib3.util.retry import Retry
 
 # Optional Prometheus metrics support
 try:
-    from prometheus_client import (
-        Counter,
-        Gauge,
-        Histogram,
-        start_http_server as start_metrics_server,
-    )
+    from prometheus_client import CollectorRegistry, Gauge, Counter, Histogram, push_to_gateway
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -236,7 +230,7 @@ class Config:
 
     # Prometheus metrics
     metrics_enabled: bool = True
-    metrics_port: int = 9102
+    pushgateway_url: str = "localhost:9091"
 
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
@@ -291,7 +285,7 @@ class Config:
             telemetry_enabled=get_bool("TELEMETRY_ENABLED", True),
             telemetry_url=os.getenv("TELEMETRY_URL", "https://bouncer-telemetry.ms2738.workers.dev/ping"),
             metrics_enabled=get_bool("METRICS_ENABLED", True),
-            metrics_port=int(os.getenv("METRICS_PORT", "9102")),
+            pushgateway_url=os.getenv("METRICS_PUSHGATEWAY_URL", "localhost:9091"),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
@@ -335,7 +329,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
         enabled_key="enable_ipsum",
     ),
-    # Spamhaus DROP/EDROP
+    # Spamhaus DROP
     BlocklistSource(
         name="Spamhaus DROP",
         url="https://www.spamhaus.org/drop/drop.txt",
@@ -540,14 +534,14 @@ class MetricsCollector:
     """
     Prometheus metrics collector for blocklist import.
 
-    Exposes metrics on a configurable HTTP port (default 9102).
+    Push metrics on a configurable URL (default localhost:9091).
     All metrics are prefixed with 'blocklist_import_'.
     """
 
-    def __init__(self, port: int = 9102, logger: Optional[logging.Logger] = None):
-        self.port = port
+    def __init__(self, pushgateway_url: Optional[str] = None, logger: Optional[logging.Logger] = None):
+        self.pushgateway_url = pushgateway_url  # e.g., "localhost:9091"
         self.logger = logger or logging.getLogger("blocklist-import")
-        self._server_started = False
+        self.registry = CollectorRegistry()  # Separate registry
 
         if not PROMETHEUS_AVAILABLE:
             self.logger.warning(
@@ -560,18 +554,21 @@ class MetricsCollector:
         self.total_ips = Gauge(
             "blocklist_import_total_ips",
             "Total number of IPs imported in the last run",
+            registry=self.registry
         )
 
         # Gauge: Unix timestamp of last successful run
         self.last_run_timestamp = Gauge(
             "blocklist_import_last_run_timestamp",
             "Unix timestamp of the last import run",
+            registry=self.registry
         )
 
         # Gauge: Number of enabled blocklist sources
         self.sources_enabled = Gauge(
             "blocklist_import_sources_enabled",
             "Number of enabled blocklist sources",
+            registry=self.registry
         )
 
         # Counter: Total import errors (cumulative)
@@ -579,6 +576,7 @@ class MetricsCollector:
             "blocklist_import_errors_total",
             "Total number of import errors",
             ["error_type"],  # Labels: fetch, parse, import
+            registry=self.registry
         )
 
         # Histogram: Import duration in seconds
@@ -586,44 +584,49 @@ class MetricsCollector:
             "blocklist_import_duration_seconds",
             "Duration of import run in seconds",
             buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+            registry=self.registry
         )
 
         # Additional useful metrics
         self.sources_successful = Gauge(
             "blocklist_import_sources_successful",
             "Number of sources successfully fetched in the last run",
+            registry=self.registry
         )
 
         self.sources_failed = Gauge(
             "blocklist_import_sources_failed",
             "Number of sources that failed to fetch in the last run",
+            registry=self.registry
         )
 
         self.existing_decisions = Gauge(
             "blocklist_import_existing_decisions",
             "Number of existing CrowdSec decisions found",
+            registry=self.registry
         )
 
         self.new_ips = Gauge(
             "blocklist_import_new_ips",
             "Number of new unique IPs added in the last run",
+            registry=self.registry
         )
 
-    def start_server(self) -> bool:
-        """Start the Prometheus metrics HTTP server."""
-        if not PROMETHEUS_AVAILABLE:
+    def push_metrics(self) -> bool:
+        """Push metrics to Pushgateway."""
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             return False
 
-        if self._server_started:
-            return True
-
         try:
-            start_metrics_server(self.port)
-            self._server_started = True
-            self.logger.info(f"Prometheus metrics server started on port {self.port}")
+            push_to_gateway(
+                self.pushgateway_url,
+                job='crowdsec-blocklist-import',
+                registry=self.registry
+            )
+            self.logger.info(f"Pushed metrics to Pushgateway at {self.pushgateway_url}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to start metrics server: {e}")
+            self.logger.error(f"Failed to push metrics to Pushgateway at {self.pushgateway_url}: {e}")
             return False
 
     def update_from_stats(self, stats: "ImportStats", enabled_sources: int) -> None:
@@ -653,7 +656,10 @@ class MetricsCollector:
         # Record duration
         self.duration_seconds.observe(stats.duration_seconds)
 
-        self.logger.debug(f"Updated Prometheus metrics: {stats.imported_ok} IPs imported")
+        # Push to Pushgateway
+        if self.pushgateway_url:
+            if self.push_metrics():
+                self.logger.debug(f"Updated Prometheus metrics: {stats.imported_ok} IPs imported")
 
 
 # Global metrics instance (initialized in main)
@@ -665,10 +671,10 @@ def get_metrics() -> Optional[MetricsCollector]:
     return _metrics
 
 
-def init_metrics(port: int, logger: logging.Logger) -> MetricsCollector:
+def init_metrics(pushgateway_url: str, logger: logging.Logger) -> MetricsCollector:
     """Initialize the global metrics collector."""
     global _metrics
-    _metrics = MetricsCollector(port=port, logger=logger)
+    _metrics = MetricsCollector(pushgateway_url=pushgateway_url, logger=logger)
     return _metrics
 
 
@@ -767,7 +773,7 @@ def parse_ip_or_network(value: str) -> Optional[str]:
         return (None, value)
 
 
-def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource, logger: logging.Logger) -> Generator[str, None, None]:
+def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource) -> Generator[str, None, None]:
     """
     Extract IP addresses/networks from a line of text.
 
@@ -894,7 +900,7 @@ def fetch_blocklist(
                 else:
                     line = raw_line
 
-                for ip in extract_ips_from_line(line, errors, source, logger):
+                for ip in extract_ips_from_line(line, errors, source):
                     total_ip_cnt += 1
                     if ip not in seen_ips:
                         if ip in allow_list:
@@ -1502,10 +1508,10 @@ Environment Variables:
   DRY_RUN                  Set to true for dry run mode
   TELEMETRY_ENABLED        Set to false to disable telemetry
   METRICS_ENABLED          Set to false to disable Prometheus metrics (default: true)
-  METRICS_PORT             Port for Prometheus metrics endpoint (default: 9102)
+  METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
 
   ENABLE_IPSUM             Enable IPsum blocklist (default: true)
-  ENABLE_SPAMHAUS          Enable Spamhaus DROP/EDROP (default: true)
+  ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
   ENABLE_BLOCKLIST_DE      Enable Blocklist.de feeds (default: true)
   ENABLE_FIREHOL           Enable Firehol levels 1/2/3 (default: true)
   ENABLE_ABUSE_CH          Enable Abuse.ch feeds (default: true)
@@ -1585,9 +1591,8 @@ cause the program to exit with an error. Unknown ENABLE_* variables
     )
 
     parser.add_argument(
-        "--metrics-port",
-        type=int,
-        help="Port for Prometheus metrics endpoint (overrides METRICS_PORT, default: 9102)",
+        "--pushgateway-url",
+        help="Push URL for Prometheus (overrides METRICS_PUSHGATEWAY_URL, default: localhost:9091)",
     )
 
     parser.add_argument(
@@ -1619,8 +1624,8 @@ def main() -> int:
         config.decision_duration = args.duration
     if args.batch_size:
         config.batch_size = args.batch_size
-    if args.metrics_port:
-        config.metrics_port = args.metrics_port
+    if args.pushgateway_url:
+        config.pushgateway_url = args.pushgateway_url
     if args.no_metrics:
         config.metrics_enabled = False
 
@@ -1657,8 +1662,8 @@ def main() -> int:
 
     # Initialize and start Prometheus metrics server
     if config.metrics_enabled and PROMETHEUS_AVAILABLE:
-        metrics = init_metrics(config.metrics_port, logger)
-        metrics.start_server()
+        init_metrics(config.pushgateway_url, logger)
+
     elif config.metrics_enabled and not PROMETHEUS_AVAILABLE:
         logger.warning(
             "Prometheus metrics requested but prometheus-client not installed. "

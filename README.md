@@ -152,7 +152,7 @@ Examples:
 usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
                            [--lapi-key LAPI_KEY] [--duration DURATION]
                            [--batch-size BATCH_SIZE] [--validate]
-                           [--list-sources] [--metrics-port PORT]
+                           [--list-sources] [--pushgateway-url PROMETHEUS_PUSH_URL]
                            [--no-metrics]
 
 options:
@@ -166,7 +166,7 @@ options:
   --batch-size SIZE     IPs per import batch
   --validate            validate configuration and exit
   --list-sources        list all available blocklist sources
-  --metrics-port PORT   port for Prometheus metrics (default: 9102)
+  --pushgateway-url URL push URL for Prometheus metrics (default: localhost:9091)
   --no-metrics          disable Prometheus metrics endpoint
 ```
 
@@ -246,7 +246,7 @@ cscli decisions delete --origin blocklist-import
 | `TELEMETRY_ENABLED` | `true` | Anonymous usage telemetry |
 | `TELEMETRY_URL` | `https://bouncer-telemetry.ms2738.workers.dev/ping` | Anonymous usage telemetry URL |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |
-| `METRICS_PORT` | `9102` | Port for Prometheus metrics HTTP server |
+| `METRICS_PUSHGATEWAY_URL` | `localhost:9091` | Push gateway URL of Prometheus metrics HTTP server |
 
 ### Blocklist Toggles
 
@@ -255,7 +255,7 @@ All blocklists are enabled by default. Set to `false` to disable:
 | Variable | Source |
 |----------|--------|
 | `ENABLE_IPSUM` | IPsum (aggregated threat intel) |
-| `ENABLE_SPAMHAUS` | Spamhaus DROP/EDROP |
+| `ENABLE_SPAMHAUS` | Spamhaus DROP |
 | `ENABLE_BLOCKLIST_DE` | Blocklist.de (all feeds) |
 | `ENABLE_FIREHOL` | Firehol levels 1/2/3 |
 | `ENABLE_ABUSE_CH` | Feodo, URLhaus |
@@ -294,11 +294,11 @@ If the original row to ignore ends contains comment, it should not be included i
 
 ## Prometheus Metrics
 
-The blocklist importer exposes Prometheus metrics on port 9102 (configurable via `METRICS_PORT`).
+The blocklist importer pushes Prometheus metrics to localhost:9091 (configurable via `METRICS_PUSHGATEWAY_URL`).
 
 ### Enabling Metrics
 
-Metrics are enabled by default. To expose them in Docker:
+Push metrics to Prometheus are enabled by default. To configure them in Docker:
 
 ```yaml
 services:
@@ -308,8 +308,10 @@ services:
       - "9102:9102"
     environment:
       - METRICS_ENABLED=true
-      - METRICS_PORT=9102
+      - METRICS_PUSHGATEWAY_URL=localhost:9091
 ```
+
+To setup the push gateway in Prometheus, see [pushgateway README.md](https://github.com/prometheus/pushgateway/blob/master/README.md).
 
 ### Available Metrics
 

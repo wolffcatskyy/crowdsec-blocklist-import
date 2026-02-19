@@ -28,9 +28,9 @@ services:
       # Anonymous telemetry (enabled by default, set to false to disable)
       - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
 
-      # Prometheus metrics (enabled by default on port 9102)
+      # Prometheus metrics (enabled by default, pushing to localhost:9091)
       - METRICS_ENABLED=${METRICS_ENABLED:-true}
-      - METRICS_PORT=${METRICS_PORT:-9102}
+      - METRICS_PUSHGATEWAY_URL=${METRICS_PUSHGATEWAY_URL:-localhost:9091}
 
     ports:
       # Prometheus metrics endpoint
