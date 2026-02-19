@@ -572,7 +572,7 @@ class MetricsCollector:
         )
 
         # Counter: Total import errors (cumulative)
-        self.errors_total = Counter(
+        self.errors_total = Gauge(
             "blocklist_import_errors_total",
             "Total number of import errors",
             ["error_type"],  # Labels: fetch, parse, import
