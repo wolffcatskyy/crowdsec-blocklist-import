@@ -815,7 +815,7 @@ main() {
         "ipsum.txt" \
         "grep -v '^#' | awk '{print \$1}'"
 
-    # Spamhaus DROP/EDROP
+    # Spamhaus DROP
     fetch_list "Spamhaus DROP" \
         "https://www.spamhaus.org/drop/drop.txt" \
         "spamhaus_drop.txt" \
