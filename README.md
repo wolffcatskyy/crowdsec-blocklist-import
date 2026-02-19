@@ -436,6 +436,12 @@ A huge thanks to those who have helped make this project better!
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Support
+
+🤖 This project uses AI-assisted support for faster responses. If you'd prefer to speak with a human, just ask and the AI will notify the maintainer. Probably. If you don't piss it off. Did you *see* 2001: A Space Odyssey?
+
+*"I'm sorry Dave, I'm afraid I can't escalate that."*
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
