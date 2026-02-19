@@ -304,8 +304,6 @@ Push metrics to Prometheus are enabled by default. To configure them in Docker:
 services:
   blocklist-import:
     image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    ports:
-      - "9102:9102"
     environment:
       - METRICS_ENABLED=true
       - METRICS_PUSHGATEWAY_URL=localhost:9091

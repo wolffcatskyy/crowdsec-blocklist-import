@@ -32,10 +32,6 @@ services:
       - METRICS_ENABLED=${METRICS_ENABLED:-true}
       - METRICS_PUSHGATEWAY_URL=${METRICS_PUSHGATEWAY_URL:-localhost:9091}
 
-    ports:
-      # Prometheus metrics endpoint
-      - "9102:9102"
-
     volumes:
       # Docker socket for accessing CrowdSec container
       - /var/run/docker.sock:/var/run/docker.sock:ro
