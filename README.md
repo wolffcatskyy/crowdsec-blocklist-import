@@ -231,7 +231,8 @@ cscli decisions delete --origin blocklist-import
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALLOWLIST` | `` | Comma-separated list of blocklist row data to ignore |
+| `ALLOWLIST` | `` | Comma-separated IPs and/or CIDR ranges to exclude |
+| `ALLOWLIST_GITHUB` | `false` | Auto-fetch GitHub IP ranges and add to allowlist |
 | `DECISION_DURATION` | `24h` | How long decisions last |
 | `LOG_TIMESTAMPS` | `true` | Include timestamps in logs |
 | `DECISION_REASON` | `external_blocklist` | The decision identifier |
@@ -286,11 +287,48 @@ This tool requires both:
 - Bouncer key for checking existing decisions (deduplication)
 - Machine credentials for writing new decisions via the `/alerts` endpoint
 
-## Allow-lists
+## Allowlists
 
-The `ALLOWLIST` environment variable can be used to specify block-list rows to ignore.
+The `ALLOWLIST` environment variable lets you exclude specific IPs and CIDR ranges from being imported into CrowdSec. This is useful when legitimate infrastructure IPs (like GitHub, your CDN, or monitoring services) appear in threat feeds.
 
-If the original row to ignore ends contains comment, it should not be included in the allow-list item
+### CIDR-Aware Matching (v3.4.0+)
+
+The allowlist supports both individual IPs and CIDR notation. Any IP from a blocklist that falls within an allowlisted range will be skipped:
+
+```bash
+# Individual IPs (backwards compatible)
+ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
+
+# CIDR ranges - any IP within these ranges is excluded
+ALLOWLIST="140.82.112.0/20,185.199.108.0/22"
+
+# Mixed - individual IPs and CIDR ranges together
+ALLOWLIST="1.2.3.4,140.82.112.0/20,185.199.108.0/22,192.30.252.0/22"
+```
+
+When a blocklist contains a CIDR range (e.g., `1.2.3.0/24`), it is checked for overlap with allowlisted networks. If the blocklist range overlaps with any allowlisted range, it is skipped.
+
+### Provider Allowlists
+
+Built-in provider allowlists auto-fetch IP ranges from well-known services. This is especially useful for services like GitHub whose IPs appear in many threat feeds.
+
+#### GitHub (`ALLOWLIST_GITHUB`)
+
+GitHub IPs are reported by 18+ blocklist sources (IPsum, CI Army, AbuseIPDB, Binary Defense, Firehol, etc.) because GitHub's infrastructure is used for both legitimate traffic and abuse. If you run services that need to reach GitHub (Gitea mirrors, CI/CD, package managers), you should allowlist GitHub's ranges.
+
+```bash
+# Auto-fetch GitHub IP ranges from https://api.github.com/meta
+ALLOWLIST_GITHUB=true
+```
+
+This fetches ranges for: `git`, `web`, `api`, `hooks`, and `actions` endpoints. If the GitHub API is unreachable, it falls back to hardcoded ranges covering the most common prefixes.
+
+You can combine `ALLOWLIST_GITHUB` with manual `ALLOWLIST` entries:
+
+```bash
+ALLOWLIST="10.0.0.1,my-cdn-range/24"
+ALLOWLIST_GITHUB=true
+```
 
 ## Prometheus Metrics
 
@@ -446,13 +484,19 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 MIT License - see [LICENSE](LICENSE)
 
-### Allow-lists (v2.2.0)
+### Allowlists (v3.4.0)
 
-Remove specific IPs or CIDRs from blocklists before import:
+Exclude specific IPs or CIDR ranges from blocklists before import:
 
 ```bash
-# Inline allow-list (comma-separated)
+# Individual IPs
 -e ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
+
+# CIDR ranges (new in v3.4.0)
+-e ALLOWLIST="140.82.112.0/20,185.199.108.0/22"
+
+# Auto-fetch GitHub IP ranges (new in v3.4.0)
+-e ALLOWLIST_GITHUB=true
 ```
 
-> **Note:** URL-based (`ALLOWLIST_URL`) and file-based (`ALLOWLIST_FILE`) allowlists are planned for a future release. Currently only the inline `ALLOWLIST` variable is supported.
+> **Note:** URL-based (`ALLOWLIST_URL`) and file-based (`ALLOWLIST_FILE`) allowlists are planned for a future release.
