@@ -2,23 +2,26 @@
 
 This document outlines the planned features and improvements for `crowdsec-blocklist-import`. We welcome community contributions to any of these items.
 
-**Current Version:** v3.3.2
+**Current Version:** v3.4.0
 **GitHub Stars:** 167
 
 ---
 
-## v3.4.0 — Prometheus Push Gateway Fix
+## v3.4.0 — CIDR Allowlists & Prometheus Push Gateway
 
-**Status:** In Progress (PR #35)
+**Status:** Released
 **Target:** Q1 2026
 
-The current Prometheus metrics implementation uses a pull model, which does not work well for short-lived containers that run on a schedule. PR #35 refactors this to use Prometheus Push Gateway instead.
+Adds CIDR-aware allowlist matching and provider allowlists (GitHub), plus Prometheus Push Gateway support.
 
 ### Changes
-- [ ] Switch from Prometheus scrape endpoint to Push Gateway
-- [ ] Add `PUSHGATEWAY_URL` environment variable
-- [ ] Include Grafana dashboard JSON for easy monitoring setup
-- [ ] Fix credential file reading regression from v3.3.0
+- [x] Switch from Prometheus scrape endpoint to Push Gateway (PR #35)
+- [x] Add `PUSHGATEWAY_URL` environment variable
+- [x] Include Grafana dashboard JSON for easy monitoring setup
+- [x] Fix credential file reading regression from v3.3.0
+- [x] CIDR-aware allowlist matching (`ALLOWLIST="140.82.112.0/20"`) (#38)
+- [x] `ALLOWLIST_GITHUB=true` provider allowlist - auto-fetches GitHub IP ranges
+- [x] Backwards-compatible: individual IPs in ALLOWLIST still work
 
 ---
 
@@ -141,6 +144,7 @@ We use **AI-Ready Issues** — every issue includes implementation details, acce
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| v3.4.0 | 2026-02-20 | CIDR allowlists, ALLOWLIST_GITHUB provider, Prometheus push gateway |
 | v3.3.2 | 2026-02-17 | Allowlist parsing fix |
 | v3.3.1 | 2026-02-17 | CrowdSec credential file fix |
 | v3.3.0 | 2026-02-16 | Docker secrets, allowlists, CLI enhancements, Prometheus metrics, env validation |
