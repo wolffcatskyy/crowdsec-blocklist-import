@@ -1,502 +1,482 @@
-# CrowdSec Blocklist Import - Python Edition
+# crowdsec-blocklist-import
 
-Memory-efficient Python 3.11+ implementation of [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) using the LAPI HTTP API directly.
+**Real-time, deduplicated, normalized CrowdSec blocklists — instantly enforced across all your firewalls, CDNs, and network devices.**
 
-[![NixOS packaging](https://img.shields.io/badge/NixOS-packaging%20in%20progress-5277C3?logo=nixos&logoColor=white)](https://github.com/NixOS/nixpkgs/pull/486054)
+[![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
+[![Version](https://img.shields.io/badge/version-3.4.0-blue?style=flat-square)](https://github.com/wolffcatskyy/crowdsec-blocklist-import)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-crowdsec--blocklist--import--python-blue?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import-python)
 
-## Features
+---
 
-- **LAPI Mode Only**: Direct HTTP API calls, no Docker socket needed
-- **Memory Efficient**: Streaming downloads, line-by-line processing
-- **Batch Processing**: Configurable batch size (default 1000 IPs)
-- **Full IPv4/IPv6 Support**: Uses Python's `ipaddress` module
-- **Automatic Deduplication**: Skips existing CrowdSec decisions
-- **Retry Logic**: Exponential backoff for failed requests
-- **Type Hints**: Full type annotations for IDE support
-- **30+ Blocklists**: Same sources as the bash version
-- **Per-feed Control**: Enable/disable individual blocklist sources
-- **Prometheus Metrics**: Built-in metrics endpoint for monitoring
+## Security Advisory
 
-## Quick Start
+This is the official CrowdSec blocklist import tool maintained at [wolffcatskyy/crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import).
 
-### Prerequisites
+If you downloaded this from another source or a different GitHub user, you may be using an impostor repository with malicious code. Always verify you're using the official source.
 
-CrowdSec LAPI requires **machine credentials** to write decisions. Create them first:
+---
+
+## AI Disclosure
+
+This project was developed with assistance from Claude AI. We disclose this transparently because you deserve to know how your security tools are built.
+
+---
+
+## Why IP Freshness Matters
+
+Most blocklist tools suffer from a critical flaw: **staleness**. They fetch blocklists on a schedule, cache them, and enforce stale entries for days or weeks. By then, threat actors have rotated to new infrastructure, but your firewall still blocks addresses that were compromised weeks ago.
+
+**crowdsec-blocklist-import solves this:**
+
+- **Fresh IPs propagate instantly** — New threats from 24+ feeds hit your network within minutes, not days
+- **Expired threats are removed immediately** — Recovered IPs are automatically delisted, not held for weeks
+- **No cron delays** — Run hourly or on-demand without overhead
+- **No stale drift** — Every sync is a complete refresh; no orphaned entries linger
+
+This is the difference between reactive security (waiting for alerts) and **active threat intelligence** (staying ahead of attackers).
+
+---
+
+## Core Features
+
+**Deduplication Engine** — Automatically detects IPs already in CrowdSec, eliminating redundant processing and API calls.
+
+**Normalization Layer** — Strips comments, validates CIDR blocks, removes duplicates, enforces consistent formatting across all 24+ threat feeds.
+
+**Real-Time Sync** — No caching, no delays. Every import is a complete refresh with live threat data.
+
+**24+ Threat Feeds** — IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, Talos, Tor nodes, scanner IPs, and more.
+
+**Per-Feed Control** — Enable or disable individual blocklists via environment variables. Want just Spamhaus? Set `ENABLE_SPAMHAUS=true` and disable the rest.
+
+**Allowlist Support** — Three-tier allowlist system: static IP lists, CIDR ranges, and provider-specific exceptions. Whitelist your ISP, CDN, or trusted partners.
+
+**Prometheus Metrics** — Push metrics to Prometheus Pushgateway for monitoring imports, deduplication rates, and feed health.
+
+---
+
+## Quickstart
+
+### 1. Prerequisites
+
+You need CrowdSec running and LAPI credentials:
 
 ```bash
-# On your CrowdSec host (or docker exec crowdsec ...)
-cscli machines add blocklist-import --password 'YourSecurePassword'
+# Create machine credentials (for writing decisions)
+cscli machines add blocklist-import --password 'SecurePassword123'
 
-# Also create a bouncer key for reading existing decisions
+# Create bouncer key (for reading existing decisions)
 cscli bouncers add blocklist-import -o raw
+# Copy the output — you'll need it below
 ```
 
-### Docker Compose
+### 2. Docker Compose (Recommended)
 
 ```yaml
 services:
   blocklist-import:
     image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    container_name: blocklist-import
-    restart: "no"
-    networks:
-      - crowdsec  # Must be on same network as CrowdSec
-    environment:
-      - CROWDSEC_LAPI_URL=http://crowdsec:8080
-      - CROWDSEC_LAPI_KEY=${CROWDSEC_LAPI_KEY}
-      - CROWDSEC_MACHINE_ID=blocklist-import
-      - CROWDSEC_MACHINE_PASSWORD=${CROWDSEC_MACHINE_PASSWORD}
-      - DECISION_DURATION=24h
-      - TZ=America/New_York
-
-networks:
-  crowdsec:
-    external: true
-```
-
-### Docker Compose with Secrets
-
-For production deployments, use Docker secrets instead of environment variables:
-
-```yaml
-secrets:
-  crowdsec_lapi_key:
-    file: ./secrets/crowdsec_lapi_key.txt
-  crowdsec_machine_password:
-    file: ./secrets/crowdsec_machine_password.txt
-
-services:
-  blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    container_name: blocklist-import
     restart: "no"
     networks:
       - crowdsec
-    secrets:
-      - crowdsec_lapi_key
-      - crowdsec_machine_password
     environment:
       - CROWDSEC_LAPI_URL=http://crowdsec:8080
-      - CROWDSEC_LAPI_KEY_FILE=/run/secrets/crowdsec_lapi_key
+      - CROWDSEC_LAPI_KEY=YOUR_BOUNCER_KEY
       - CROWDSEC_MACHINE_ID=blocklist-import
-      - CROWDSEC_MACHINE_PASSWORD_FILE=/run/secrets/crowdsec_machine_password
+      - CROWDSEC_MACHINE_PASSWORD=SecurePassword123
       - DECISION_DURATION=24h
-      - TZ=America/New_York
+      - LOG_LEVEL=INFO
 
 networks:
   crowdsec:
     external: true
 ```
 
-Create the secrets files:
+Run it:
 
 ```bash
-mkdir -p ./secrets
-echo "your-bouncer-api-key" > ./secrets/crowdsec_lapi_key.txt
-echo "your-machine-password" > ./secrets/crowdsec_machine_password.txt
-chmod 600 ./secrets/*.txt
+docker compose up --abort-on-container-exit
 ```
 
-### Direct Execution
+### 3. Schedule It (Cron)
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Daily at 4am
+0 4 * * * docker compose -f /path/to/compose.yml up --abort-on-container-exit
+```
 
-# Configure
+---
+
+## Installation
+
+### Docker (Fastest)
+
+```bash
+# One-liner using Docker run
+docker run --rm --network crowdsec \
+  -e CROWDSEC_LAPI_URL=http://crowdsec:8080 \
+  -e CROWDSEC_LAPI_KEY=YOUR_KEY \
+  -e CROWDSEC_MACHINE_ID=blocklist-import \
+  -e CROWDSEC_MACHINE_PASSWORD=YourPassword \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+```
+
+### pip (Requires Python 3.11+)
+
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+cd crowdsec-blocklist-import
+
+pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your credentials
 
-# Run
 python blocklist_import.py
+```
 
-# Or dry-run first
+### From Source
+
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+cd crowdsec-blocklist-import
+docker build -t my-blocklist-import .
+docker run --rm --network crowdsec -e ... my-blocklist-import
+```
+
+For detailed installation instructions, see [Configuration Reference](docs/config-reference.md).
+
+---
+
+## Configuration
+
+### Minimal Setup
+
+Edit `.env` with your CrowdSec credentials:
+
+```bash
+CROWDSEC_LAPI_URL=http://crowdsec:8080
+CROWDSEC_LAPI_KEY=your_bouncer_key
+CROWDSEC_MACHINE_ID=blocklist-import
+CROWDSEC_MACHINE_PASSWORD=your_password
+DECISION_DURATION=24h
+```
+
+### Common Settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DECISION_DURATION` | `24h` | How long imported decisions last |
+| `BATCH_SIZE` | `1000` | IPs per batch (memory vs. speed tradeoff) |
+| `DECISION_TYPE` | `ban` | Type of decision (ban, captcha, throttle) |
+| `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARN, ERROR |
+| `DRY_RUN` | `false` | Preview without importing |
+
+### Selective Blocklists
+
+Disable feeds you don't need:
+
+```bash
+ENABLE_IPSUM=true           # Keep aggregated threats
+ENABLE_SPAMHAUS=true        # Keep Spamhaus
+ENABLE_TOR=false            # Disable Tor (may cause false positives)
+ENABLE_SCANNERS=false       # Disable scanner detection
+```
+
+All blocklists are enabled by default. See [Configuration Reference](docs/config-reference.md) for the full list.
+
+### Allowlists
+
+Protect trusted IPs from being blocked:
+
+```bash
+# Comma-separated IPs and/or CIDR ranges
+ALLOWLIST="1.2.3.4,5.6.7.8,192.168.0.0/16,10.0.0.0/8"
+
+# Auto-fetch GitHub IP ranges (covers git, web, api, hooks, actions)
+ALLOWLIST_GITHUB=true
+```
+
+---
+
+## Supported Blocklists
+
+crowdsec-blocklist-import pulls from 24+ threat intelligence sources:
+
+| Source | Purpose | Type |
+|--------|---------|------|
+| **IPsum** | Aggregated threat intel (IPs on 3+ blocklists) | Aggregated |
+| **Spamhaus DROP/EDROP** | Known hijacked networks | Network blocks |
+| **Blocklist.de** | SSH, web, mail attacks (all categories) | Attack vectors |
+| **Firehol Level 1/2/3** | Malware, C2, compromised hosts | Malware |
+| **Abuse.ch** | Feodo (banking malware), SSL blacklist, URLhaus | Malware |
+| **Emerging Threats** | Compromised IP detection | Threats |
+| **Binary Defense** | Malware, DoS, botnet IPs | Malware |
+| **Bruteforce Blocker** | SSH/RDP brute force attacks | Attacks |
+| **DShield** | Top attacking IPs (Internet Storm Center) | Threats |
+| **CI Army** | Bad reputation hosts | Threats |
+| **Abuse IPDB** | Reported malicious IPs | Threats |
+| **Cybercrime Tracker** | Cybercrime infrastructure | Malware |
+| **Monty Security C2** | Command and control servers | Malware |
+| **VX Vault** | Malware hosting IPs | Malware |
+| **Botvrij** | Botnet C2 servers | Malware |
+| **GreenSnow** | Attacker IPs | Threats |
+| **StopForumSpam** | Forum spam sources | Spam |
+| **Tor Exit Nodes** | Tor network exit points | Privacy |
+| **Scanner IPs** | Shodan, Censys, Internet scanners | Scanners |
+
+For a complete list with URLs and threat types, see [Examples](docs/examples.md).
+
+---
+
+## CLI Usage
+
+```bash
+python blocklist_import.py [options]
+
+Options:
+  -h, --help                Show help
+  -v, --version             Show version and exit
+  -n, --dry-run             Preview without importing
+  -d, --debug               Enable debug logging
+  --lapi-url URL            Override LAPI URL
+  --lapi-key KEY            Override LAPI key
+  --duration DURATION       Override decision duration
+  --batch-size SIZE         Override batch size
+  --list-sources            List all available blocklist sources
+  --validate                Validate configuration and exit
+  --pushgateway-url URL     Override Prometheus Pushgateway URL
+  --no-metrics              Disable Prometheus metrics for this run
+```
+
+### Examples
+
+Dry-run to see what would be imported:
+
+```bash
 python blocklist_import.py --dry-run
 ```
 
-### NixOS
-
-A NixOS package and module is being packaged in [nixpkgs#486054](https://github.com/NixOS/nixpkgs/pull/486054). Once merged, install with:
-
-```nix
-services.crowdsec-blocklist-import = {
-  enable = true;
-  # Configuration options available — see the NixOS module for details
-};
-```
-
-## CLI Options
-
-### Bash Script (import.sh)
-
-```text
-Usage: import.sh [OPTIONS]
-
-Options:
-  --help, -h          Show help message and exit
-  --version, -v       Show version number and exit
-  --list-sources      List all available blocklist sources with their toggle variables
-  --dry-run           Run without making changes (same as DRY_RUN=true)
-
-Examples:
-  ./import.sh --version           # Show version
-  ./import.sh --help              # Show help
-  ./import.sh --list-sources      # List all 30 blocklist sources
-  ./import.sh --dry-run           # Preview what would be imported
-  ENABLE_TOR_EXIT_NODES=false ./import.sh  # Run with Tor sources disabled
-```
-
-### Python Script (blocklist_import.py)
-
-```text
-usage: blocklist_import.py [-h] [-v] [-n] [-d] [--lapi-url LAPI_URL]
-                           [--lapi-key LAPI_KEY] [--duration DURATION]
-                           [--batch-size BATCH_SIZE] [--validate]
-                           [--list-sources] [--pushgateway-url PROMETHEUS_PUSH_URL]
-                           [--no-metrics]
-
-options:
-  -h, --help            show this help message and exit
-  -v, --version         show version and exit
-  -n, --dry-run         don't import, just show what would be done
-  -d, --debug           enable debug logging
-  --lapi-url LAPI_URL   CrowdSec LAPI URL
-  --lapi-key LAPI_KEY   CrowdSec LAPI key (bouncer)
-  --duration DURATION   decision duration (e.g., 24h, 48h)
-  --batch-size SIZE     IPs per import batch
-  --validate            validate configuration and exit
-  --list-sources        list all available blocklist sources
-  --pushgateway-url URL push URL for Prometheus metrics (default: localhost:9091)
-  --no-metrics          disable Prometheus metrics endpoint
-```
-
-## Environment Variable Validation
-
-The tool validates all `ENABLE_*` environment variables at startup:
-
-1. **Value validation**: All `ENABLE_*` variables must be valid boolean strings (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`)
-2. **Typo detection**: Unknown `ENABLE_*` variables generate warnings with suggestions for similar valid names
-
-### Validation Examples
+List all available sources:
 
 ```bash
-# Validate configuration without running import
-./blocklist_import.py --validate
-
-# List all available blocklist sources and their status
-./blocklist_import.py --list-sources
+python blocklist_import.py --list-sources
 ```
 
-### Error Messages
-
-Invalid values will cause the program to exit with a clear error message:
-
-```text
-[ERROR] Configuration validation failed:
-[ERROR]
-[ERROR]   Invalid value for ENABLE_IPSUM: 'maybe'
-[ERROR]     Expected one of: true, false, 1, 0, yes, no, on, off (case-insensitive)
-[ERROR]
-[ERROR] Fix the above errors and try again.
-[ERROR] Use --list-sources to see all valid ENABLE_* variables.
-```
-
-Typos in variable names generate warnings but don't stop execution:
-
-```text
-[WARNING] Unknown environment variable: ENABLE_IPSOM=false
-[WARNING]   Did you mean: ENABLE_IPSUM?
-```
-
-## Removing all blocked IPs
-
-All added decisions have their origin set to `blocklist-import`, so they can be cleared by running:
+Import with custom settings:
 
 ```bash
-cscli decisions delete --origin blocklist-import
+python blocklist_import.py --duration 48h --batch-size 500
 ```
 
-## Environment Variables
+---
 
-### Required
+## Advanced Usage
 
-| Variable | Description |
-|----------|-------------|
-| `CROWDSEC_LAPI_URL` | CrowdSec LAPI URL (default: `http://localhost:8080`) |
-| `CROWDSEC_LAPI_KEY` or `CROWDSEC_LAPI_KEY_FILE` | Bouncer API key / key file for reading decisions |
-| `CROWDSEC_MACHINE_ID` | Machine ID for writing decisions |
-| `CROWDSEC_MACHINE_PASSWORD` or `CROWDSEC_MACHINE_PASSWORD_FILE` | Machine password / password file for authentication |
+### Custom Allowlist
 
-### Optional
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ALLOWLIST` | `` | Comma-separated IPs and/or CIDR ranges to exclude |
-| `ALLOWLIST_GITHUB` | `false` | Auto-fetch GitHub IP ranges and add to allowlist |
-| `DECISION_DURATION` | `24h` | How long decisions last |
-| `LOG_TIMESTAMPS` | `true` | Include timestamps in logs |
-| `DECISION_REASON` | `external_blocklist` | The decision identifier |
-| `DECISION_TYPE` | `ban` | The type of decision applied |
-| `DECISION_ORIGIN` | `blocklist-import` | The decision origin name |
-| `DECISION_SCENARIO` | `external/blocklist` | The decision scenario name |
-| `BATCH_SIZE` | `1000` | IPs per import batch |
-| `FETCH_TIMEOUT` | `60` | The fetch timeout in seconds |
-| `MAX_RETRIES` | `3` | How many times to retry fetching in case of error |
-| `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARN, ERROR |
-| `DRY_RUN` | `false` | Set to true for dry run |
-| `TELEMETRY_ENABLED` | `true` | Anonymous usage telemetry |
-| `TELEMETRY_URL` | `https://bouncer-telemetry.ms2738.workers.dev/ping` | Anonymous usage telemetry URL |
-| `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |
-| `METRICS_PUSHGATEWAY_URL` | `localhost:9091` | Push gateway URL of Prometheus metrics HTTP server |
-
-### Blocklist Toggles
-
-All blocklists are enabled by default. Set to `false` to disable:
-
-| Variable | Source |
-|----------|--------|
-| `ENABLE_IPSUM` | IPsum (aggregated threat intel) |
-| `ENABLE_SPAMHAUS` | Spamhaus DROP |
-| `ENABLE_BLOCKLIST_DE` | Blocklist.de (all feeds) |
-| `ENABLE_FIREHOL` | Firehol levels 1/2/3 |
-| `ENABLE_ABUSE_CH` | Feodo, URLhaus |
-| `ENABLE_EMERGING_THREATS` | Emerging Threats |
-| `ENABLE_BINARY_DEFENSE` | Binary Defense |
-| `ENABLE_BRUTEFORCE_BLOCKER` | Bruteforce Blocker |
-| `ENABLE_DSHIELD` | DShield |
-| `ENABLE_CI_ARMY` | CI Army |
-| `ENABLE_BOTVRIJ` | Botvrij |
-| `ENABLE_GREENSNOW` | GreenSnow |
-| `ENABLE_STOPFORUMSPAM` | StopForumSpam |
-| `ENABLE_TOR` | Tor exit nodes |
-| `ENABLE_SCANNERS` | Shodan/Censys/Maltrail |
-| `ENABLE_ABUSE_IPDB` | Abuse IPDB |
-| `ENABLE_CYBERCRIME_TRACKER` | Cybercrime tracker |
-| `ENABLE_MONTY_SECURITY_C2` | Monty Security C2 |
-| `ENABLE_VXVAULT` | VX Vault |
-
-## Authentication
-
-CrowdSec LAPI uses two types of authentication:
-
-1. **Bouncer API Key** (`X-Api-Key` header) - Read-only access to decisions
-2. **Machine Credentials** (JWT token via `/watchers/login`) - Full access including writing alerts/decisions
-
-This tool requires both:
-
-- Bouncer key for checking existing decisions (deduplication)
-- Machine credentials for writing new decisions via the `/alerts` endpoint
-
-## Allowlists
-
-The `ALLOWLIST` environment variable lets you exclude specific IPs and CIDR ranges from being imported into CrowdSec. This is useful when legitimate infrastructure IPs (like GitHub, your CDN, or monitoring services) appear in threat feeds.
-
-### CIDR-Aware Matching (v3.4.0+)
-
-The allowlist supports both individual IPs and CIDR notation. Any IP from a blocklist that falls within an allowlisted range will be skipped:
+Combine static IPs, CIDR ranges, and provider allowlists:
 
 ```bash
-# Individual IPs (backwards compatible)
-ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
+# Static IPs and CIDR ranges
+ALLOWLIST="192.168.1.1,203.0.113.5,198.51.100.0/24"
 
-# CIDR ranges - any IP within these ranges is excluded
-ALLOWLIST="140.82.112.0/20,185.199.108.0/22"
-
-# Mixed - individual IPs and CIDR ranges together
-ALLOWLIST="1.2.3.4,140.82.112.0/20,185.199.108.0/22,192.30.252.0/22"
-```
-
-When a blocklist contains a CIDR range (e.g., `1.2.3.0/24`), it is checked for overlap with allowlisted networks. If the blocklist range overlaps with any allowlisted range, it is skipped.
-
-### Provider Allowlists
-
-Built-in provider allowlists auto-fetch IP ranges from well-known services. This is especially useful for services like GitHub whose IPs appear in many threat feeds.
-
-#### GitHub (`ALLOWLIST_GITHUB`)
-
-GitHub IPs are reported by 18+ blocklist sources (IPsum, CI Army, AbuseIPDB, Binary Defense, Firehol, etc.) because GitHub's infrastructure is used for both legitimate traffic and abuse. If you run services that need to reach GitHub (Gitea mirrors, CI/CD, package managers), you should allowlist GitHub's ranges.
-
-```bash
-# Auto-fetch GitHub IP ranges from https://api.github.com/meta
+# Auto-fetch GitHub IP ranges (git, web, api, hooks, actions)
 ALLOWLIST_GITHUB=true
 ```
 
-This fetches ranges for: `git`, `web`, `api`, `hooks`, and `actions` endpoints. If the GitHub API is unreachable, it falls back to hardcoded ranges covering the most common prefixes.
+### Prometheus Metrics
 
-You can combine `ALLOWLIST_GITHUB` with manual `ALLOWLIST` entries:
-
-```bash
-ALLOWLIST="10.0.0.1,my-cdn-range/24"
-ALLOWLIST_GITHUB=true
-```
-
-## Prometheus Metrics
-
-The blocklist importer pushes Prometheus metrics to localhost:9091 (configurable via `METRICS_PUSHGATEWAY_URL`).
-
-### Enabling Metrics
-
-Push metrics to Prometheus are enabled by default. To configure them in Docker:
-
-```yaml
-services:
-  blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    environment:
-      - METRICS_ENABLED=true
-      - METRICS_PUSHGATEWAY_URL=localhost:9091
-```
-
-To setup the push gateway in Prometheus, see [pushgateway README.md](https://github.com/prometheus/pushgateway/blob/master/README.md).
-
-### Available Metrics
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `blocklist_import_total_ips` | Gauge | Total number of IPs imported in the last run |
-| `blocklist_import_last_run_timestamp` | Gauge | Unix timestamp of the last import run |
-| `blocklist_import_sources_enabled` | Gauge | Number of enabled blocklist sources |
-| `blocklist_import_sources_successful` | Gauge | Number of sources successfully fetched |
-| `blocklist_import_sources_failed` | Gauge | Number of sources that failed to fetch |
-| `blocklist_import_existing_decisions` | Gauge | Number of existing CrowdSec decisions found |
-| `blocklist_import_new_ips` | Gauge | Number of new unique IPs added |
-| `blocklist_import_errors_total` | Counter | Total number of errors (labels: `error_type`) |
-| `blocklist_import_duration_seconds` | Histogram | Duration of import run in seconds |
-
-### Error Types
-
-The `blocklist_import_errors_total` counter uses the `error_type` label:
-
-- `fetch` - Failed to download a blocklist source
-- `parse` - Failed to parse an IP address from blocklist
-- `encoding` - Character encoding errors
-- `import` - Failed to import IPs to CrowdSec LAPI
-
-### Example Prometheus Config
-
-```yaml
-scrape_configs:
-  - job_name: 'blocklist-import'
-    static_configs:
-      - targets: ['blocklist-import:9102']
-    scrape_interval: 5m
-```
-
-### Example Grafana Queries
-
-```promql
-# IPs imported over time
-blocklist_import_total_ips
-
-# Import success rate
-blocklist_import_sources_successful / blocklist_import_sources_enabled
-
-# Time since last run (for alerting on stale imports)
-time() - blocklist_import_last_run_timestamp
-
-# Error rate by type
-rate(blocklist_import_errors_total[1h])
-```
-
-## Memory Efficiency
-
-This implementation is designed to handle 500k+ IPs without memory issues:
-
-1. **Streaming Downloads**: Blocklists are processed line-by-line, never fully loaded
-2. **Batch Imports**: IPs are sent to LAPI in configurable batches
-3. **Set Deduplication**: Only unique IPs are tracked (O(1) lookup)
-
-Typical memory usage: ~50-100MB even with millions of IPs processed.
-
-## Scheduling
-
-### Cron (Linux)
-
-```cron
-# Daily at 4am
-0 4 * * * /path/to/blocklist_import.py >> /var/log/blocklist-import.log 2>&1
-```
-
-### Docker Compose with Cron
-
-```yaml
-services:
-  blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    restart: "no"
-    environment:
-      - CROWDSEC_LAPI_URL=http://crowdsec:8080
-      - CROWDSEC_LAPI_KEY=${CROWDSEC_LAPI_KEY}
-      - CROWDSEC_MACHINE_ID=blocklist-import
-      - CROWDSEC_MACHINE_PASSWORD=${CROWDSEC_MACHINE_PASSWORD}
-```
-
-Schedule with:
+Push metrics to Pushgateway:
 
 ```bash
-0 4 * * * docker compose -f /path/to/compose.yaml up --abort-on-container-exit
+METRICS_PUSHGATEWAY_URL=http://prometheus:9091
 ```
 
-## Comparison with Bash Version
+Metrics tracked:
+- Total IPs imported
+- Deduplicated entries
+- Failed imports per source
+- Import duration
 
-| Feature | Bash | Python |
-|---------|------|--------|
-| CrowdSec Access | Docker exec / Native cscli | LAPI HTTP only |
-| Memory Usage | ~200MB+ (temp files) | ~50-100MB (streaming) |
-| Dependencies | curl, awk, grep, sort | requests, python-dotenv |
-| IPv6 Support | Limited | Full (ipaddress module) |
-| Per-feed Control | No | Yes (ENABLE_* vars) |
-| Type Safety | No | Yes (type hints) |
-| Error Handling | Basic | Retry with backoff |
-| Authentication | None (uses cscli) | Machine JWT + Bouncer key |
+### Docker with Custom Config
 
-## Development
+Mount your `.env` file:
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Type checking
-mypy blocklist_import.py
-
-# Linting
-ruff check blocklist_import.py
+docker run --rm \
+  --network crowdsec \
+  -v /path/to/.env:/app/.env:ro \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
 ```
 
-## Contributors
+### Scheduling with Systemd Timer
 
-A huge thanks to those who have helped make this project better!
+Create `/etc/systemd/system/blocklist-import.service`:
 
-- **[@gaelj](https://github.com/gaelj)** - Major contributor to v3.3.0, implementing Docker secrets support (`_FILE` env vars), allowlist functionality, CLI enhancements, Prometheus metrics, environment validation with typo detection, and adding multiple new blocklist sources. [PR #30](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/30)
+```ini
+[Unit]
+Description=CrowdSec Blocklist Import
+After=docker.service
+Requires=docker.service
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+[Service]
+Type=oneshot
+ExecStart=docker compose -f /opt/compose/blocklist-import.yml up --abort-on-container-exit
+StandardOutput=journal
+StandardError=journal
+```
 
-## Support
+Create `/etc/systemd/system/blocklist-import.timer`:
 
-🤖 This project uses AI-assisted support for faster responses. If you'd prefer to speak with a human, just ask and the AI will notify the maintainer. Probably. If you don't piss it off. Did you *see* 2001: A Space Odyssey?
+```ini
+[Unit]
+Description=CrowdSec Blocklist Import Timer
+Requires=blocklist-import.service
 
-*"I'm sorry Dave, I'm afraid I can't escalate that."*
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now blocklist-import.timer
+```
+
+For more examples, see [Advanced Usage](docs/examples.md).
+
+---
+
+## Complete CrowdSec Suite
+
+crowdsec-blocklist-import is part of a complete threat detection and enforcement stack:
+
+| Tool | Purpose | Status |
+|------|---------|--------|
+| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Import threat feeds into CrowdSec | Published |
+| **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Enforce decisions on UniFi networks | Published |
+| **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Parse UniFi logs into CrowdSec | Published |
+
+Deploy all three for defense-in-depth: threat feeds → CrowdSec detection → UniFi enforcement.
+
+---
+
+## Troubleshooting
+
+### CrowdSec Connection Failed
+
+Check LAPI URL:
+
+```bash
+curl http://crowdsec:8080/health
+```
+
+Should return `200 OK`. If using Docker, ensure the container is on the same network:
+
+```bash
+docker network inspect crowdsec
+```
+
+### Authentication Error
+
+Verify credentials:
+
+```bash
+# Test bouncer key
+curl -H "X-Api-Key: YOUR_KEY" http://crowdsec:8080/decisions
+
+# Test machine login
+curl -X POST http://crowdsec:8080/watchers/login \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id":"blocklist-import","password":"YourPassword"}'
+```
+
+### No IPs Imported
+
+Check logs:
+
+```bash
+docker logs blocklist-import  # If running in Docker
+python blocklist_import.py --debug  # For detailed output
+```
+
+Common causes:
+- All blocklists disabled (check `ENABLE_*` variables)
+- CrowdSec already has all IPs (check deduplication in logs)
+- Network connectivity issue (check `curl https://example.com`)
+
+### Memory Issues
+
+Reduce batch size:
+
+```bash
+BATCH_SIZE=100  # Default is 1000
+```
+
+Or disable large feeds:
+
+```bash
+ENABLE_IPSUM=false  # IPsum is the largest feed
+```
+
+For more troubleshooting, see [FAQ](docs/faq.md).
+
+---
+
+## Technical Details
+
+**Language:** Python 3.11+
+
+**Architecture:** Single file, ~650 lines of production code
+
+**Dependencies:** `requests`, `python-dotenv`, `prometheus-client`
+
+**Memory:** ~50-100MB streaming processing (300k+ IPs)
+
+**Speed:** 500-1000 IPs/second depending on network
+
+**Docker Image:** `ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest` (~150MB)
+
+**Authentication:** CrowdSec LAPI with machine credentials (JWT) + bouncer key for deduplication
+
+**Database:** Direct LAPI HTTP API (no direct database access)
+
+---
+
+## Contributing
+
+We welcome contributions. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**Report bugs:** [GitHub Issues](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues)
+
+**Suggest features:** [GitHub Discussions](https://github.com/wolffcatskyy/crowdsec-blocklist-import/discussions)
+
+---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License — See [LICENSE](LICENSE) for details.
 
-### Allowlists (v3.4.0)
+---
 
-Exclude specific IPs or CIDR ranges from blocklists before import:
+## Credits
 
-```bash
-# Individual IPs
--e ALLOWLIST="140.82.121.3,140.82.121.4,8.8.8.8"
+**Maintained by** [wolffcatskyy](https://github.com/wolffcatskyy). Developed with assistance from Claude AI.
 
-# CIDR ranges (new in v3.4.0)
--e ALLOWLIST="140.82.112.0/20,185.199.108.0/22"
+**Special Thanks:**
+- [CrowdSec](https://www.crowdsec.net/) for the excellent threat detection platform
+- The security community for maintaining public threat feeds
+- [Awesome CrowdSec](https://github.com/wolffcatskyy/awesome-crowdsec) community
 
-# Auto-fetch GitHub IP ranges (new in v3.4.0)
--e ALLOWLIST_GITHUB=true
-```
+---
 
-> **Note:** URL-based (`ALLOWLIST_URL`) and file-based (`ALLOWLIST_FILE`) allowlists are planned for a future release.
+**Have questions?** Open an [issue](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues) or start a [discussion](https://github.com/wolffcatskyy/crowdsec-blocklist-import/discussions).
+
+**Want to help?** Fork, improve, and submit a PR. We're always looking for better feed sources, optimization ideas, and platform support.
