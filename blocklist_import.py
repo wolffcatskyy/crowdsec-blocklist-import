@@ -51,7 +51,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.3.2"
+__version__ = "3.4.0"
 
 # =============================================================================
 # Environment Variable Validation
@@ -232,6 +232,9 @@ class Config:
     metrics_enabled: bool = True
     pushgateway_url: str = "localhost:9091"
 
+    # Provider allowlists
+    allowlist_github: bool = False
+
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
@@ -275,6 +278,7 @@ class Config:
             decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
             decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
             allow_list=[ l.strip() for l in os.getenv("ALLOWLIST", "").split(",") if l.strip() ],
+            allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
             custom_block_lists=[ l.strip() for l in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if l.strip() ],
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
             fetch_timeout=int(os.getenv("FETCH_TIMEOUT", "60")),
@@ -710,6 +714,209 @@ EXCLUDED_IPS: Set[str] = {
 }
 
 
+# =============================================================================
+# Allowlist with CIDR Support
+# =============================================================================
+
+# GitHub meta API URL for fetching their IP ranges
+GITHUB_META_URL = "https://api.github.com/meta"
+GITHUB_META_SECTIONS = ["git", "web", "api", "hooks", "actions"]
+
+# Fallback GitHub ranges if the API is unreachable
+GITHUB_FALLBACK_RANGES = [
+    "140.82.112.0/20",
+    "185.199.108.0/22",
+    "192.30.252.0/22",
+    "143.55.64.0/20",
+]
+
+
+class Allowlist:
+    """
+    CIDR-aware allowlist for filtering IPs.
+
+    Supports both individual IPs and CIDR ranges. Uses Python's ipaddress
+    module for proper containment checks. Individual IPs are stored in a set
+    for O(1) lookup; CIDR networks are checked via containment.
+
+    To keep performance reasonable, CIDR networks are stored in a sorted list
+    and checked sequentially. For typical allowlist sizes (dozens to hundreds
+    of entries), this is fast enough. The individual IPs set provides a fast
+    path for the common case.
+    """
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        self._exact_ips: Set[str] = set()
+        self._networks_v4: list[ipaddress.IPv4Network] = []
+        self._networks_v6: list[ipaddress.IPv6Network] = []
+        self._logger = logger or logging.getLogger("blocklist-import")
+
+    @property
+    def entry_count(self) -> int:
+        """Total number of allowlist entries (IPs + networks)."""
+        return len(self._exact_ips) + len(self._networks_v4) + len(self._networks_v6)
+
+    def add_entry(self, entry: str) -> None:
+        """
+        Add an IP or CIDR range to the allowlist.
+
+        Args:
+            entry: An IP address (e.g., "1.2.3.4") or CIDR range (e.g., "140.82.112.0/20")
+        """
+        entry = entry.strip()
+        if not entry:
+            return
+
+        try:
+            if "/" in entry:
+                network = ipaddress.ip_network(entry, strict=False)
+                if isinstance(network, ipaddress.IPv4Network):
+                    self._networks_v4.append(network)
+                else:
+                    self._networks_v6.append(network)
+            else:
+                # Validate it's a real IP, then store as string for fast lookup
+                ipaddress.ip_address(entry)
+                self._exact_ips.add(entry)
+        except (ValueError, TypeError) as e:
+            self._logger.warning(f"Invalid allowlist entry '{entry}': {e}")
+
+    def add_entries(self, entries: list[str]) -> None:
+        """Add multiple entries to the allowlist."""
+        for entry in entries:
+            self.add_entry(entry)
+
+    def contains(self, ip_str: str) -> bool:
+        """
+        Check if an IP address or CIDR is in the allowlist.
+
+        For individual IPs: checks exact match and CIDR containment.
+        For CIDR ranges from blocklists: checks if the range overlaps with
+        any allowlisted network.
+
+        Args:
+            ip_str: An IP address or CIDR string to check.
+
+        Returns:
+            True if the IP/CIDR should be allowlisted (skipped).
+        """
+        # Fast path: exact string match
+        if ip_str in self._exact_ips:
+            return True
+
+        try:
+            if "/" in ip_str:
+                # It's a CIDR from a blocklist - check overlap with allowlisted networks
+                network = ipaddress.ip_network(ip_str, strict=False)
+                if isinstance(network, ipaddress.IPv4Network):
+                    for allowed_net in self._networks_v4:
+                        if network.overlaps(allowed_net):
+                            return True
+                else:
+                    for allowed_net in self._networks_v6:
+                        if network.overlaps(allowed_net):
+                            return True
+            else:
+                # It's a single IP - check containment in allowlisted networks
+                ip = ipaddress.ip_address(ip_str)
+                if isinstance(ip, ipaddress.IPv4Address):
+                    for network in self._networks_v4:
+                        if ip in network:
+                            return True
+                else:
+                    for network in self._networks_v6:
+                        if ip in network:
+                            return True
+        except (ValueError, TypeError):
+            pass
+
+        return False
+
+    def fetch_github_ranges(self, session: Optional[requests.Session] = None) -> int:
+        """
+        Fetch GitHub's published IP ranges from their meta API and add to allowlist.
+
+        Falls back to hardcoded ranges if the API is unreachable.
+
+        Args:
+            session: Optional requests session to use. Creates a new one if not provided.
+
+        Returns:
+            Number of ranges added.
+        """
+        if session is None:
+            session = requests.Session()
+
+        ranges_added = 0
+        try:
+            self._logger.info("Fetching GitHub IP ranges from meta API...")
+            response = session.get(
+                GITHUB_META_URL,
+                timeout=10,
+                headers={"User-Agent": f"crowdsec-blocklist-import/{__version__}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            seen = set()
+            for section in GITHUB_META_SECTIONS:
+                for cidr in data.get(section, []):
+                    if cidr not in seen:
+                        seen.add(cidr)
+                        self.add_entry(cidr)
+                        ranges_added += 1
+
+            self._logger.info(f"Added {ranges_added} GitHub IP ranges to allowlist")
+
+        except Exception as e:
+            self._logger.warning(f"Could not fetch GitHub meta API ({e}), using fallback ranges")
+            for cidr in GITHUB_FALLBACK_RANGES:
+                self.add_entry(cidr)
+                ranges_added += 1
+            self._logger.info(f"Added {ranges_added} fallback GitHub IP ranges to allowlist")
+
+        return ranges_added
+
+
+def build_allowlist(config: "Config", session: Optional[requests.Session] = None,
+                    logger: Optional[logging.Logger] = None) -> Allowlist:
+    """
+    Build an Allowlist from the configuration.
+
+    Processes the ALLOWLIST env var entries and fetches provider ranges
+    (e.g., GitHub) if enabled.
+
+    Args:
+        config: The application configuration.
+        session: Optional requests session for fetching remote allowlists.
+        logger: Optional logger instance.
+
+    Returns:
+        A populated Allowlist instance.
+    """
+    allowlist = Allowlist(logger=logger)
+
+    # Add user-defined allowlist entries (supports both IPs and CIDRs)
+    if config.allow_list:
+        allowlist.add_entries(config.allow_list)
+        if allowlist.entry_count > 0:
+            if logger:
+                logger.info(f"Allowlist: {allowlist.entry_count} user-defined entries loaded")
+
+    # Fetch provider allowlists
+    if config.allowlist_github:
+        allowlist.fetch_github_ranges(session=session)
+
+    if allowlist.entry_count > 0 and logger:
+        logger.info(
+            f"Allowlist total: {len(allowlist._exact_ips)} IPs, "
+            f"{len(allowlist._networks_v4)} IPv4 networks, "
+            f"{len(allowlist._networks_v6)} IPv6 networks"
+        )
+
+    return allowlist
+
+
 def is_private_or_reserved(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Check if an IP is in a private or reserved range."""
     for network in PRIVATE_NETWORKS:
@@ -857,7 +1064,7 @@ def fetch_blocklist(
     source: BlocklistSource,
     timeout: int,
     seen_ips: Set[str],
-    allow_list: list[str],
+    allowlist: Allowlist,
     stats: ImportStats,
     logger: logging.Logger,
 ) -> tuple[list[str], FetchResult]:
@@ -903,7 +1110,7 @@ def fetch_blocklist(
                 for ip in extract_ips_from_line(line, errors, source):
                     total_ip_cnt += 1
                     if ip not in seen_ips:
-                        if ip in allow_list:
+                        if allowlist.contains(ip):
                             ignored_ip_cnt += 1
                         else:
                             seen_ips.add(ip)
@@ -1236,6 +1443,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Create HTTP session with retry logic
     session = create_http_session(config.max_retries)
 
+    # Build CIDR-aware allowlist
+    allowlist = build_allowlist(config, session=session, logger=logger)
+
     # Read secrets from files if _FILE env vars are set (Docker secrets pattern)
     # _FILE takes precedence over direct value
     lapi_key = config.lapi_key
@@ -1360,7 +1570,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             source=source,
             timeout=config.fetch_timeout,
             seen_ips=seen_ips,
-            allow_list=config.allow_list,
+            allowlist=allowlist,
             stats=stats,
             logger=logger,
         )
