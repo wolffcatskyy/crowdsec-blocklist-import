@@ -12,6 +12,7 @@ Features:
 - Automatic deduplication
 - Retry logic with exponential backoff
 - Full type hints
+- Per-source Prometheus metrics (status, IPs, duration, errors with message)
 
 Authors:
 
@@ -40,7 +41,7 @@ from urllib3.util.retry import Retry
 
 # Optional Prometheus metrics support
 try:
-    from prometheus_client import CollectorRegistry, Gauge, Counter, Histogram, push_to_gateway
+    from prometheus_client import CollectorRegistry, Gauge, Histogram, push_to_gateway, delete_from_gateway
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -553,6 +554,68 @@ def list_blocklist_sources(logger: logging.Logger) -> None:
 
 
 # =============================================================================
+# Prometheus Metrics — error message sanitization
+# =============================================================================
+
+# Fixed-category error message labels to bound Prometheus label cardinality.
+# Raw exception strings (containing hostnames, ports, retry counts, etc.)
+# must NEVER be used directly as label values — doing so creates a new time
+# series per unique string and causes storage bloat in the Pushgateway (issue #3).
+#
+# Every call-site that records an error MUST pass the exception through
+# sanitize_error_message() before using it as a label value.
+
+_ERROR_PATTERNS: list[tuple[str, str]] = [
+    # requests / urllib3 transport errors — checked against class name first
+    ("ConnectionError",         "connection_error"),
+    ("ConnectTimeout",          "connect_timeout"),
+    ("ReadTimeout",             "read_timeout"),
+    ("Timeout",                 "timeout"),
+    ("SSLError",                "ssl_error"),
+    ("TooManyRedirects",        "too_many_redirects"),
+    ("ChunkedEncodingError",    "chunked_encoding_error"),
+    ("ContentDecodingError",    "content_decoding_error"),
+    # HTTP status codes embedded in HTTPError messages
+    ("404",                     "http_404"),
+    ("403",                     "http_403"),
+    ("429",                     "http_429"),
+    ("500",                     "http_500"),
+    ("502",                     "http_502"),
+    ("503",                     "http_503"),
+    ("504",                     "http_504"),
+    ("HTTPError",               "http_error"),
+    # Misc
+    ("UnicodeDecodeError",      "unicode_decode_error"),
+    ("JSONDecodeError",         "json_decode_error"),
+    ("ValueError",              "value_error"),
+]
+
+
+def sanitize_error_message(exc: Exception) -> str:
+    """
+    Convert an exception into a fixed-category string safe for use as a
+    Prometheus label value.
+
+    Iterates through a priority-ordered list of known patterns (class name
+    substrings and HTTP status codes). Returns the first match, or the
+    exception *class name* as a stable fallback.
+
+    Never returns the raw str(exc), which may contain hostnames, ports,
+    retry counts, or other unbounded content that would create a new
+    Prometheus time series on every run (issue #3).
+    """
+    exc_type = type(exc).__name__
+    exc_str = str(exc)
+
+    for pattern, category in _ERROR_PATTERNS:
+        if pattern in exc_type or pattern in exc_str:
+            return category
+
+    # Fallback: exception class name — finite and stable across runs
+    return exc_type[:64]
+
+
+# =============================================================================
 # Prometheus Metrics
 # =============================================================================
 
@@ -560,18 +623,43 @@ class MetricsCollector:
     """
     Prometheus metrics collector for blocklist import.
 
-    Push metrics on a configurable URL (default localhost:9091).
-    All metrics are prefixed with 'blocklist_import_'.
+    Per-source granularity:
+      - blocklist_import_source_status{source}
+            Gauge: 1 = success, 0 = failed.
+            Success/failure is encoded as the *value*, not a label (issue #4).
+      - blocklist_import_source_ips{source}               IPs fetched per source
+      - blocklist_import_source_duration_seconds{source}  fetch time per source
+      - blocklist_import_errors_total{error_type, source, message}
+            error_type: "fetch" | "parse" | "import" | "encoding"  (issue #5)
+            message: sanitized fixed-category string — never raw exception text,
+            to keep label cardinality bounded (issue #3).
+
+    Aggregate gauges (for stat panels / success-rate):
+      - blocklist_import_total_ips
+      - blocklist_import_new_ips
+      - blocklist_import_existing_decisions
+      - blocklist_import_encoding_errors_total            (issue #5)
+      - blocklist_import_sources_enabled / _successful / _failed
+      - blocklist_import_last_run_timestamp
+      - blocklist_import_duration_seconds (histogram)
+
+    Stale-gauge strategy (issue #6):
+      The CollectorRegistry is re-created fresh for every run, and
+      delete_from_gateway() is called before push_to_gateway(). This ensures
+      that error/source metrics from a prior run that do not recur are
+      removed from the Pushgateway rather than persisting indefinitely.
     """
 
     def __init__(self, pushgateway_url: Optional[str] = None, logger: Optional[logging.Logger] = None):
         self.pushgateway_url = pushgateway_url  # e.g., "localhost:9091"
         self.logger = logger or logging.getLogger("blocklist-import")
-        self.registry = CollectorRegistry()  # Separate registry
+        # Fresh registry per run — prevents stale label combinations from
+        # lingering in the Pushgateway across runs (issue #6).
+        self.registry = CollectorRegistry()
 
         if not PROMETHEUS_AVAILABLE:
             self.logger.warning(
-                "prometheus-client not installed. Metrics endpoint disabled. "
+                "prometheus-client not installed. Metrics disabled. "
                 "Install with: pip install prometheus-client"
             )
             return
@@ -580,112 +668,213 @@ class MetricsCollector:
         self.total_ips = Gauge(
             "blocklist_import_total_ips",
             "Total number of IPs imported in the last run",
-            registry=self.registry
+            registry=self.registry,
         )
 
         # Gauge: Unix timestamp of last successful run
         self.last_run_timestamp = Gauge(
             "blocklist_import_last_run_timestamp",
             "Unix timestamp of the last import run",
-            registry=self.registry
+            registry=self.registry,
         )
 
         # Gauge: Number of enabled blocklist sources
         self.sources_enabled = Gauge(
             "blocklist_import_sources_enabled",
             "Number of enabled blocklist sources",
-            registry=self.registry
+            registry=self.registry,
         )
 
-        # Counter: Total import errors (cumulative)
+        # Per-error detail.
+        # error_type = "fetch" | "parse" | "import" | "encoding"
+        # source      = BlocklistSource.name  (stable, human-readable)
+        # message     = sanitized fixed-category string — never raw exception text.
+        #               See sanitize_error_message() for the full category list.
         self.errors_total = Gauge(
             "blocklist_import_errors_total",
-            "Total number of import errors",
-            ["error_type"],  # Labels: fetch, parse, import
-            registry=self.registry
+            "Import errors labelled by type, source, and sanitized message category. "
+            "message values are fixed categories (not raw exception strings) to bound cardinality.",
+            ["error_type", "source", "message"],
+            registry=self.registry,
         )
 
-        # Histogram: Import duration in seconds
         self.duration_seconds = Histogram(
             "blocklist_import_duration_seconds",
-            "Duration of import run in seconds",
+            "Duration of full import run in seconds",
             buckets=[1, 5, 10, 30, 60, 120, 300, 600],
-            registry=self.registry
+            registry=self.registry,
         )
 
-        # Additional useful metrics
         self.sources_successful = Gauge(
             "blocklist_import_sources_successful",
             "Number of sources successfully fetched in the last run",
-            registry=self.registry
+            registry=self.registry,
         )
 
         self.sources_failed = Gauge(
             "blocklist_import_sources_failed",
             "Number of sources that failed to fetch in the last run",
-            registry=self.registry
+            registry=self.registry,
         )
 
         self.existing_decisions = Gauge(
             "blocklist_import_existing_decisions",
             "Number of existing CrowdSec decisions found",
-            registry=self.registry
+            registry=self.registry,
         )
 
         self.new_ips = Gauge(
             "blocklist_import_new_ips",
             "Number of new unique IPs added in the last run",
-            registry=self.registry
+            registry=self.registry,
         )
 
-    def push_metrics(self) -> bool:
-        """Push metrics to Pushgateway."""
-        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
-            return False
+        # Encoding errors were tracked in stats but previously invisible in
+        # Prometheus. Now exposed as a top-level gauge
+        self.encoding_errors_total = Gauge(
+            "blocklist_import_encoding_errors_total",
+            "Total number of lines skipped due to encoding errors across all sources",
+            registry=self.registry,
+        )
 
-        try:
-            push_to_gateway(
-                self.pushgateway_url,
-                job='crowdsec-blocklist-import',
-                registry=self.registry
+        # Per-source granular metrics.
+        # source_status value: 1 = success, 0 = failed.
+        # There is intentionally NO 'status' label — value encodes the state
+        self.source_status = Gauge(
+            "blocklist_import_source_status",
+            "Per-source fetch status: 1=success, 0=failed",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_ips = Gauge(
+            "blocklist_import_source_ips",
+            "Number of unique new IPs fetched from each source in the last run",
+            ["source"],
+            registry=self.registry,
             )
-            self.logger.info(f"Pushed metrics to Pushgateway at {self.pushgateway_url}")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to push metrics to Pushgateway at {self.pushgateway_url}: {e}")
-            return False
 
-    def update_from_stats(self, stats: "ImportStats", enabled_sources: int) -> None:
-        """Update all metrics from ImportStats."""
+        self.source_duration_seconds = Gauge(
+            "blocklist_import_source_duration_seconds",
+            "Time taken to fetch and parse each source (seconds)",
+            ["source"],
+            registry=self.registry,
+        )
+
+    # ------------------------------------------------------------------
+    # Per-source helpers — called directly from fetch_blocklist / run_import
+    # ------------------------------------------------------------------
+
+    def record_source_success(self, source_name: str, ip_count: int, duration: float) -> None:
+        """Record a successful source fetch."""
         if not PROMETHEUS_AVAILABLE:
             return
+        self.source_status.labels(source=source_name).set(1)
+        self.source_ips.labels(source=source_name).set(ip_count)
+        self.source_duration_seconds.labels(source=source_name).set(duration)
 
-        # Update gauges
+    def record_source_failure(self, source_name: str, error_type: str,
+                               exc: Optional[Exception], duration: float) -> None:
+        """
+        Record a failed source fetch.
+
+        exc is sanitized to a fixed category string before being stored as a
+        label value — never use str(exc) directly (issue #3).
+        """
+        if not PROMETHEUS_AVAILABLE:
+            return
+        self.source_status.labels(source=source_name).set(0)
+        self.source_ips.labels(source=source_name).set(0)
+        self.source_duration_seconds.labels(source=source_name).set(duration)
+        short_msg = sanitize_error_message(exc) if isinstance(exc, Exception) else (str(exc)[:64] if exc else "unknown")
+        self.errors_total.labels(
+            error_type=error_type,
+            source=source_name,
+            message=short_msg,
+        ).set(1)
+
+    def record_parse_errors(self, source_name: str, errors: dict[str, int]) -> None:
+        """
+        Record per-source parse errors.
+
+        Bad token strings are truncated to 64 chars. Unlike exception
+        messages, parse tokens are naturally bounded per source.
+        """
+        if not PROMETHEUS_AVAILABLE or not errors:
+            return
+        for bad_token, count in errors.items():
+            short_token = bad_token[:120]
+            self.errors_total.labels(
+                error_type="parse",
+                source=source_name,
+                message=short_token,
+            ).set(count)
+
+    def record_encoding_errors(self, count: int) -> None:
+        """
+        Record the aggregate encoding error count (issue #5).
+
+        Previously these were tracked in ImportStats and logged but never
+        surfaced in Prometheus. Now visible as blocklist_import_encoding_errors_total.
+        """
+        if not PROMETHEUS_AVAILABLE or count == 0:
+            return
+        self.encoding_errors_total.set(count)
+
+    # ------------------------------------------------------------------
+    # End-of-run aggregate update
+    # ------------------------------------------------------------------
+
+    def update_aggregates(self, stats: "ImportStats", enabled_count: int) -> None:
+        """Update scalar/aggregate gauges at end of run."""
+        if not PROMETHEUS_AVAILABLE:
+            return
         self.total_ips.set(stats.imported_ok)
+        self.new_ips.set(stats.new_ips)
         self.last_run_timestamp.set(time.time())
-        self.sources_enabled.set(enabled_sources)
+        self.sources_enabled.set(enabled_count)
         self.sources_successful.set(stats.sources_ok)
         self.sources_failed.set(stats.sources_failed)
         self.existing_decisions.set(stats.existing_skipped)
-        self.new_ips.set(stats.new_ips)
-
-        # Increment error counters
-        if stats.sources_failed > 0:
-            self.errors_total.labels(error_type="fetch").inc(stats.sources_failed)
-        if stats.parse_errors > 0:
-            self.errors_total.labels(error_type="parse").inc(stats.parse_errors)
-        if stats.encoding_errors > 0:
-            self.errors_total.labels(error_type="encoding").inc(stats.encoding_errors)
-        if stats.imported_failed > 0:
-            self.errors_total.labels(error_type="import").inc(stats.imported_failed)
-
-        # Record duration
         self.duration_seconds.observe(stats.duration_seconds)
+        self.record_encoding_errors(stats.encoding_errors)
 
-        # Push to Pushgateway
-        if self.pushgateway_url:
-            if self.push_metrics():
-                self.logger.debug(f"Updated Prometheus metrics: {stats.imported_ok} IPs imported")
+    def push(self) -> bool:
+        """
+        Push all metrics to the Pushgateway.
+
+        Calls delete_from_gateway() first to remove any label combinations
+        from previous runs that are not present in the current run. Without
+        this, resolved errors and disabled sources would persist in the
+        Pushgateway indefinitely (issue #6).
+        """
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            return False
+        try:
+            # Remove stale time series from the previous run.
+            # Non-fatal: if deletion fails we warn but still push, which will
+            # overwrite any series present in both runs.
+            try:
+                delete_from_gateway(
+                    self.pushgateway_url,
+                    job="crowdsec-blocklist-import",
+                )
+            except Exception as del_exc:
+                self.logger.warning(
+                    f"Could not delete stale metrics from Pushgateway "
+                    f"({self.pushgateway_url}): {del_exc}"
+                )
+
+            push_to_gateway(
+                self.pushgateway_url,
+                job="crowdsec-blocklist-import",
+                registry=self.registry,
+            )
+            self.logger.info(f"Metrics pushed to Pushgateway at {self.pushgateway_url}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to push metrics to {self.pushgateway_url}: {e}")
+            return False
 
 
 # Global metrics instance (initialized in main)
@@ -1071,7 +1260,10 @@ class FetchResult:
     source: BlocklistSource
     success: bool
     ip_count: int = 0
-    error: Optional[str] = None
+    duration: float = 0.0
+    error_type: str = ""                    # "fetch" | "parse" | "import" | "encoding"
+    error_exc: Optional[Exception] = None   # original exception (sanitized before use as label)
+    parse_errors: dict[str, int] = field(default_factory=dict)
 
 
 def log_separator(logger):
@@ -1084,16 +1276,18 @@ def fetch_blocklist(
     timeout: int,
     seen_ips: Set[str],
     allowlist: Allowlist,
-    stats: ImportStats,
+    stats: "ImportStats",
     logger: logging.Logger,
 ) -> tuple[list[str], FetchResult]:
     """
-    Fetch and process a blocklist, returning new unique IPs.
+    Fetch and parse a single blocklist source.
 
-    Memory efficient: processes line by line without loading entire file.
-    Returns a tuple of (new_ips_list, fetch_result).
+    Returns (new_unique_ips, FetchResult).
+    FetchResult now carries duration, error_type, error_message and
+    per-token parse_errors so MetricsCollector can record full detail.
     """
     new_ips: list[str] = []
+    t0 = time.time()
 
     try:
         logger.debug(f"Fetching {source.name} from {source.url}")
@@ -1110,7 +1304,8 @@ def fetch_blocklist(
         # Use iter_lines without decode_unicode to handle encoding ourselves
         total_ip_cnt = 0
         ignored_ip_cnt = 0
-        errors = dict()
+        parse_errors: dict[str, int] = {}
+
         for raw_line in response.iter_lines():
             if raw_line:
                 # Decode bytes to string, handling various encodings
@@ -1126,7 +1321,7 @@ def fetch_blocklist(
                 else:
                     line = raw_line
 
-                for ip in extract_ips_from_line(line, errors, source):
+                for ip in extract_ips_from_line(line, parse_errors, source):
                     total_ip_cnt += 1
                     if ip not in seen_ips:
                         if allowlist.contains(ip):
@@ -1134,26 +1329,54 @@ def fetch_blocklist(
                         else:
                             seen_ips.add(ip)
                             new_ips.append(ip)
+
+        # Log parse errors (capped)
         max_cnt = 20
-        for error in errors:
-            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{errors[error]})')
+        for error in parse_errors:
+            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{parse_errors[error]})')
             max_cnt -= 1
             if max_cnt == 0:
                 break
-        nb_errors = sum([errors[e] for e in errors.keys()])
+
+        nb_errors = sum(parse_errors.values())
         stats.parse_errors += nb_errors
 
         ignored_ips = f"{ignored_ip_cnt} ignored IPs (allow-list), " if ignored_ip_cnt > 0 else ""
-        error_cnt = f", {nb_errors} parse errors" if len(errors) > 0 else ""
-        logger.debug(f"{source.name}: {total_ip_cnt} total IPs{error_cnt}, {ignored_ips}{len(new_ips)} unique new IPs")
-        return new_ips, FetchResult(source=source, success=True, ip_count=len(new_ips))
+        error_cnt = f", {nb_errors} parse errors" if nb_errors > 0 else ""
+        logger.debug(
+            f"{source.name}: {total_ip_cnt} total IPs{error_cnt}, "
+            f"{ignored_ips}{len(new_ips)} unique new IPs"
+        )
+
+        duration = time.time() - t0
+        return new_ips, FetchResult(
+            source=source,
+            success=True,
+            ip_count=len(new_ips),
+            duration=duration,
+            parse_errors=parse_errors,
+        )
 
     except requests.RequestException as e:
+        duration = time.time() - t0
         logger.warning(f"{source.name}: unavailable ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(
+            source=source,
+            success=False,
+            duration=duration,
+            error_type="fetch",
+            error_exc=e,
+        )
     except Exception as e:
+        duration = time.time() - t0
         logger.error(f"{source.name}: unexpected error ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(
+            source=source,
+            success=False,
+            duration=duration,
+            error_type="fetch",
+            error_exc=e,
+        )
 
 
 # =============================================================================
@@ -1464,6 +1687,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     # Build CIDR-aware allowlist
     allowlist = build_allowlist(config, session=session, logger=logger)
+    metrics = get_metrics()
 
     # Read secrets from files if _FILE env vars are set (Docker secrets pattern)
     # _FILE takes precedence over direct value
@@ -1529,12 +1753,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     for source in BLOCKLIST_SOURCES:
         if getattr(config, source.enabled_key, True):
             enabled_sources.append(source)
-    if config.custom_block_lists is not None:
-        i = 0
-        for c in config.custom_block_lists:
-            if c:
-                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", c, "custom_blocklists"))
-                i += 1
+    if config.custom_block_lists:
+        for i, url in enumerate(config.custom_block_lists):
+            if url:
+                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, "custom_blocklists"))
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
@@ -1547,35 +1769,38 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if failed > 0:
             logger.warning(f"Failed to import {failed} IPs")
 
-    def flush_batch(sourceName: str) -> tuple[int, int]:
+    def flush_batch(source_name: str) -> tuple[int, int]:
         """Import the current batch to CrowdSec."""
         nonlocal batch
         if not batch:
-            return (0, 0)
+            return 0, 0
 
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(batch)} IPs")
             stats.imported_ok += len(batch)
-            ok = len(batch)
-            failed = 0
+            ok, failed = len(batch), 0
         else:
             ok, failed = lapi.add_decisions(
                 ips=batch,
                 duration=config.decision_duration,
-                reason=f"{config.decision_reason} ({sourceName})",
+                reason=f"{config.decision_reason} ({source_name})",
                 decision_type=config.decision_type,
                 origin=config.decision_origin,
-                scenario=f"{config.decision_scenario} ({sourceName})",
+                scenario=f"{config.decision_scenario} ({source_name})",
             )
             stats.imported_ok += ok
             stats.imported_failed += failed
-            # if ok > 0:
-            #     logger.debug(f"Imported batch of {ok} IPs")
-            # if failed > 0:
-            #     logger.warning(f"Failed to import {failed} IPs")
+
+            # Record import errors in metrics
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source=source_name,
+                    message="lapi_write_failure",
+                ).set(failed)
 
         batch = []
-        return (ok, failed)
+        return ok, failed
 
     # Process each blocklist source
     for source in enabled_sources:
@@ -1594,7 +1819,24 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger=logger,
         )
 
-        # Track statistics
+        # --- Update per-source metrics immediately after fetch ---
+        if metrics:
+            if result.success:
+                metrics.record_source_success(
+                    source_name=source.name,
+                    ip_count=result.ip_count,
+                    duration=result.duration,
+                )
+                if result.parse_errors:
+                    metrics.record_parse_errors(source.name, result.parse_errors)
+            else:
+                metrics.record_source_failure(
+                    source_name=source.name,
+                    error_type=result.error_type or "fetch",
+                    message=result.error_message,
+                    duration=result.duration,
+                )
+
         if result.success:
             stats.sources_ok += 1
         else:
@@ -1619,20 +1861,24 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         source_failed += failed
         log_batch_stats(source_ok, source_failed, batch_cnt)
 
-    # Add static scanner IPs
+    # Static scanner IPs (Censys)
     log_separator(logger)
     if config.enable_scanners:
         logger.debug("Adding static scanner IPs (Censys)")
+        t0 = time.time()
+        added = 0
         for cidr in STATIC_SCANNER_IPS:
             if cidr not in seen_ips:
                 seen_ips.add(cidr)
                 batch.append(cidr)
                 stats.new_ips += 1
                 stats.total_ips_fetched += 1
+                added += 1
         stats.sources_ok += 1
-
-        source_ok, source_failed = flush_batch("Censys")
-        log_batch_stats(source_ok, source_failed, 1)
+        ok, failed = flush_batch("Censys")
+        log_batch_stats(ok, failed, 1)
+        if metrics:
+            metrics.record_source_success("Censys", added, time.time() - t0)
 
     # Fetch AbuseIPDB direct API (if API key is configured)
     if config.abuseipdb_api_key and config.enable_abuseipdb:
@@ -1676,10 +1922,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     if config.webhook_url:
         send_webhook(config, stats, logger)
 
-    # Update Prometheus metrics
-    metrics = get_metrics()
+    # Push aggregate metrics and push to gateway
     if metrics:
-        metrics.update_from_stats(stats, len(enabled_sources))
+        metrics.update_aggregates(stats, len(enabled_sources))
+        metrics.push()
 
     # Log summary
     log_separator(logger)
