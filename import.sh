@@ -1,5 +1,10 @@
 #!/bin/bash
-# CrowdSec Blocklist Import
+# ⚠️  DEPRECATED — This bash script is no longer maintained.
+# Use the Python edition instead: python blocklist_import.py
+# See README.md for migration instructions.
+# This file will be removed in a future release.
+#
+# CrowdSec Blocklist Import (Legacy Bash Edition)
 # Imports 28+ public threat feeds directly into CrowdSec
 #
 # v2.2.0 - Implement allow-lists (fixes #26)

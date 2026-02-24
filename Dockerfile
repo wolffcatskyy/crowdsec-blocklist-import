@@ -25,7 +25,7 @@ FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="CrowdSec Blocklist Import"
 LABEL org.opencontainers.image.description="Import public threat blocklists into CrowdSec via LAPI"
-LABEL org.opencontainers.image.version="2.0.0"
+LABEL org.opencontainers.image.version="3.5.0"
 LABEL org.opencontainers.image.source="https://github.com/wolffcatskyy/crowdsec-blocklist-import"
 LABEL org.opencontainers.image.licenses="MIT"
 

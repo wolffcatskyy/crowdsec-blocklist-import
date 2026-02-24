@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import logging
 import os
+import signal
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generator, Optional, Set
 
 import requests
@@ -51,7 +53,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.4.0"
+__version__ = "3.5.0"
 
 # =============================================================================
 # Environment Variable Validation
@@ -232,6 +234,19 @@ class Config:
     metrics_enabled: bool = True
     pushgateway_url: str = "localhost:9091"
 
+    # Daemon mode (built-in scheduler)
+    interval: int = 0  # 0 = run once (default), >0 = repeat every N seconds
+    run_on_start: bool = True  # Run immediately on start, then wait for interval
+
+    # Webhook notifications
+    webhook_url: str = ""
+    webhook_type: str = "generic"  # generic, discord, slack
+
+    # AbuseIPDB direct API
+    abuseipdb_api_key: str = ""
+    abuseipdb_min_confidence: int = 90
+    abuseipdb_limit: int = 10000
+
     # Provider allowlists
     allowlist_github: bool = False
 
@@ -290,6 +305,13 @@ class Config:
             telemetry_url=os.getenv("TELEMETRY_URL", "https://bouncer-telemetry.ms2738.workers.dev/ping"),
             metrics_enabled=get_bool("METRICS_ENABLED", True),
             pushgateway_url=os.getenv("METRICS_PUSHGATEWAY_URL", "localhost:9091"),
+            interval=int(os.getenv("INTERVAL", "0")),
+            run_on_start=get_bool("RUN_ON_START", True),
+            webhook_url=os.getenv("WEBHOOK_URL", ""),
+            webhook_type=os.getenv("WEBHOOK_TYPE", "generic").lower(),
+            abuseipdb_api_key=os.getenv("ABUSEIPDB_API_KEY", ""),
+            abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
+            abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
@@ -703,6 +725,7 @@ PRIVATE_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
     ipaddress.ip_network("fc00::/7"),  # Unique local
     ipaddress.ip_network("fe80::/10"),  # Link-local
     ipaddress.ip_network("ff00::/8"),  # Multicast
+    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6
 ]
 
 # Well-known IPs to exclude (DNS resolvers, etc.)
@@ -929,7 +952,7 @@ def is_private_or_reserved(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) ->
     return False
 
 
-def parse_ip_or_network(value: str) -> Optional[str]:
+def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
     """
     Parse and validate an IP address or CIDR network.
 
@@ -959,11 +982,7 @@ def parse_ip_or_network(value: str) -> Optional[str]:
                 return (None, None)
             if str(ip) in EXCLUDED_IPS:
                 return (None, None)
-            ret = str(ip)
-            if ret.endswith(".0"):
-                value = f"{ret}/24"
-            else:
-                return (ret, None)
+            return (str(ip), None)
 
         if "/" in value:
             # Try parsing as network (CIDR)
@@ -1528,7 +1547,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if failed > 0:
             logger.warning(f"Failed to import {failed} IPs")
 
-    def flush_batch(sourceName: str) -> None:
+    def flush_batch(sourceName: str) -> tuple[int, int]:
         """Import the current batch to CrowdSec."""
         nonlocal batch
         if not batch:
@@ -1615,6 +1634,33 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         source_ok, source_failed = flush_batch("Censys")
         log_batch_stats(source_ok, source_failed, 1)
 
+    # Fetch AbuseIPDB direct API (if API key is configured)
+    if config.abuseipdb_api_key and config.enable_abuseipdb:
+        log_separator(logger)
+        abuseipdb_ips, abuseipdb_result = fetch_abuseipdb_api(
+            config=config,
+            session=session,
+            seen_ips=seen_ips,
+            allowlist=allowlist,
+            stats=stats,
+            logger=logger,
+        )
+        if abuseipdb_result.success:
+            stats.sources_ok += 1
+        else:
+            stats.sources_failed += 1
+
+        stats.total_ips_fetched += len(abuseipdb_ips)
+        stats.new_ips += len(abuseipdb_ips)
+
+        for ip in abuseipdb_ips:
+            batch.append(ip)
+            if len(batch) >= config.batch_size:
+                ok, failed = flush_batch("AbuseIPDB API")
+                log_batch_stats(ok, failed, 1)
+        ok, failed = flush_batch("AbuseIPDB API")
+        log_batch_stats(ok, failed, 1)
+
     stats.duration_seconds = time.time() - start_time
 
     # Send telemetry
@@ -1625,6 +1671,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             ip_count=stats.imported_ok,
             logger=logger,
         )
+
+    # Send webhook notification
+    if config.webhook_url:
+        send_webhook(config, stats, logger)
 
     # Update Prometheus metrics
     metrics = get_metrics()
@@ -1681,6 +1731,164 @@ def send_telemetry(
 
 
 # =============================================================================
+# Webhook Notifications
+# =============================================================================
+
+def send_webhook(config: Config, stats: "ImportStats", logger: logging.Logger) -> None:
+    """Send import results to a webhook (Discord, Slack, or generic)."""
+    if not config.webhook_url:
+        return
+
+    try:
+        if config.webhook_type == "discord":
+            payload = _format_discord_webhook(stats)
+        elif config.webhook_type == "slack":
+            payload = _format_slack_webhook(stats)
+        else:
+            payload = _format_generic_webhook(stats)
+
+        response = requests.post(
+            config.webhook_url,
+            json=payload,
+            timeout=10,
+            headers={"Content-Type": "application/json"},
+        )
+        if response.status_code < 300:
+            logger.debug(f"Webhook sent ({config.webhook_type})")
+        else:
+            logger.warning(f"Webhook returned {response.status_code}: {response.text[:200]}")
+
+    except Exception as e:
+        logger.warning(f"Webhook failed: {e}")
+
+
+def _format_discord_webhook(stats: "ImportStats") -> dict:
+    """Format stats as a Discord embed."""
+    color = 0x2ECC71 if stats.imported_failed == 0 else 0xE74C3C
+    fields = [
+        {"name": "Sources", "value": f"{stats.sources_ok} ok / {stats.sources_failed} failed", "inline": True},
+        {"name": "New IPs", "value": str(stats.new_ips), "inline": True},
+        {"name": "Imported", "value": str(stats.imported_ok), "inline": True},
+        {"name": "Duration", "value": f"{stats.duration_seconds:.1f}s", "inline": True},
+    ]
+    if stats.imported_failed > 0:
+        fields.append({"name": "Failed", "value": str(stats.imported_failed), "inline": True})
+
+    return {
+        "embeds": [{
+            "title": "CrowdSec Blocklist Import",
+            "color": color,
+            "fields": fields,
+            "footer": {"text": f"v{__version__}"},
+        }]
+    }
+
+
+def _format_slack_webhook(stats: "ImportStats") -> dict:
+    """Format stats as a Slack message."""
+    emoji = ":white_check_mark:" if stats.imported_failed == 0 else ":warning:"
+    text = (
+        f"{emoji} *CrowdSec Blocklist Import*\n"
+        f"Sources: {stats.sources_ok} ok / {stats.sources_failed} failed\n"
+        f"New IPs: {stats.new_ips} | Imported: {stats.imported_ok}\n"
+        f"Duration: {stats.duration_seconds:.1f}s"
+    )
+    if stats.imported_failed > 0:
+        text += f"\nFailed: {stats.imported_failed}"
+    return {"text": text}
+
+
+def _format_generic_webhook(stats: "ImportStats") -> dict:
+    """Format stats as a generic JSON payload."""
+    return {
+        "event": "blocklist_import_complete",
+        "version": __version__,
+        "sources_ok": stats.sources_ok,
+        "sources_failed": stats.sources_failed,
+        "new_ips": stats.new_ips,
+        "imported_ok": stats.imported_ok,
+        "imported_failed": stats.imported_failed,
+        "duration_seconds": round(stats.duration_seconds, 1),
+    }
+
+
+# =============================================================================
+# AbuseIPDB Direct API
+# =============================================================================
+
+def fetch_abuseipdb_api(
+    config: Config,
+    session: requests.Session,
+    seen_ips: Set[str],
+    allowlist: "Allowlist",
+    stats: "ImportStats",
+    logger: logging.Logger,
+) -> tuple[list[str], "FetchResult"]:
+    """
+    Fetch IPs directly from AbuseIPDB's blacklist API endpoint.
+
+    Requires an API key (free tier: 1000 reports/day, 5 checks/day).
+    Returns IPs with confidence >= abuseipdb_min_confidence.
+    """
+    source = BlocklistSource(
+        name="AbuseIPDB API",
+        url="https://api.abuseipdb.com/api/v2/blacklist",
+        enabled_key="enable_abuseipdb",
+    )
+
+    new_ips: list[str] = []
+
+    if not config.abuseipdb_api_key:
+        return new_ips, FetchResult(source=source, success=True, ip_count=0)
+
+    try:
+        logger.debug(f"Fetching AbuseIPDB blacklist (confidence >= {config.abuseipdb_min_confidence}%)")
+
+        response = session.get(
+            "https://api.abuseipdb.com/api/v2/blacklist",
+            headers={
+                "Key": config.abuseipdb_api_key,
+                "Accept": "text/plain",
+            },
+            params={
+                "confidenceMinimum": config.abuseipdb_min_confidence,
+                "limit": config.abuseipdb_limit,
+            },
+            timeout=config.fetch_timeout,
+        )
+        response.raise_for_status()
+
+        for line in response.text.splitlines():
+            ip_str = line.strip()
+            if not ip_str or ip_str.startswith("#"):
+                continue
+
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                if is_private_or_reserved(ip):
+                    continue
+                if str(ip) in EXCLUDED_IPS:
+                    continue
+                normalized = str(ip)
+                if normalized not in seen_ips:
+                    if not allowlist.contains(normalized):
+                        seen_ips.add(normalized)
+                        new_ips.append(normalized)
+            except (ValueError, TypeError):
+                stats.parse_errors += 1
+
+        logger.debug(f"AbuseIPDB API: {len(new_ips)} unique new IPs")
+        return new_ips, FetchResult(source=source, success=True, ip_count=len(new_ips))
+
+    except requests.RequestException as e:
+        logger.warning(f"AbuseIPDB API: unavailable ({e})")
+        return new_ips, FetchResult(source=source, success=False, error=str(e))
+    except Exception as e:
+        logger.error(f"AbuseIPDB API: unexpected error ({e})")
+        return new_ips, FetchResult(source=source, success=False, error=str(e))
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -1719,6 +1927,12 @@ Environment Variables:
   TELEMETRY_ENABLED        Set to false to disable telemetry
   METRICS_ENABLED          Set to false to disable Prometheus metrics (default: true)
   METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
+  INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0)
+  RUN_ON_START             In daemon mode, run immediately on start (default: true)
+  WEBHOOK_URL              Webhook URL for notifications (Discord/Slack/generic)
+  WEBHOOK_TYPE             Webhook format: generic, discord, slack (default: generic)
+  ABUSEIPDB_API_KEY        AbuseIPDB API key for direct blacklist queries
+  ABUSEIPDB_MIN_CONFIDENCE Minimum confidence score 1-100 (default: 90)
 
   ENABLE_IPSUM             Enable IPsum blocklist (default: true)
   ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
@@ -1811,6 +2025,24 @@ cause the program to exit with an error. Unknown ENABLE_* variables
         help="Disable Prometheus metrics endpoint",
     )
 
+    parser.add_argument(
+        "--interval",
+        type=int,
+        metavar="SECONDS",
+        help="Run in daemon mode: repeat every N seconds (overrides INTERVAL)",
+    )
+
+    parser.add_argument(
+        "--webhook-url",
+        help="Webhook URL for notifications (overrides WEBHOOK_URL)",
+    )
+
+    parser.add_argument(
+        "--webhook-type",
+        choices=["generic", "discord", "slack"],
+        help="Webhook format (overrides WEBHOOK_TYPE)",
+    )
+
     return parser.parse_args()
 
 
@@ -1838,6 +2070,12 @@ def main() -> int:
         config.pushgateway_url = args.pushgateway_url
     if args.no_metrics:
         config.metrics_enabled = False
+    if args.interval is not None:
+        config.interval = args.interval
+    if args.webhook_url:
+        config.webhook_url = args.webhook_url
+    if args.webhook_type:
+        config.webhook_type = args.webhook_type
 
     # Setup logging
     logger = setup_logging(config)
@@ -1880,7 +2118,16 @@ def main() -> int:
             "Install with: pip install prometheus-client"
         )
 
-    # Run import
+    # Daemon mode: repeat on interval
+    if config.interval > 0:
+        return _run_daemon(config, logger)
+
+    # Single run mode
+    return _run_once(config, logger)
+
+
+def _run_once(config: Config, logger: logging.Logger) -> int:
+    """Execute a single import run."""
     try:
         stats = run_import(config, logger)
 
@@ -1900,6 +2147,49 @@ def main() -> int:
             import traceback
             traceback.print_exc()
         return 1
+
+
+def _run_daemon(config: Config, logger: logging.Logger) -> int:
+    """Run in daemon mode: repeat imports on a fixed interval."""
+    shutdown = False
+
+    def _signal_handler(signum, frame):
+        nonlocal shutdown
+        logger.info(f"Received signal {signum}, shutting down after current run...")
+        shutdown = True
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    logger.info(f"Daemon mode: running every {config.interval}s (Ctrl+C to stop)")
+
+    run_number = 0
+    while not shutdown:
+        run_number += 1
+
+        if run_number == 1 and not config.run_on_start:
+            logger.info(f"Skipping initial run (RUN_ON_START=false), waiting {config.interval}s...")
+        else:
+            logger.info(f"Starting import run #{run_number}")
+            try:
+                stats = run_import(config, logger)
+                if stats.sources_ok == 0:
+                    logger.warning("No sources succeeded — will retry next interval")
+            except Exception as e:
+                logger.error(f"Import run #{run_number} failed: {e}")
+                if config.log_level == "DEBUG":
+                    import traceback
+                    traceback.print_exc()
+
+        # Sleep in small increments so we can respond to signals quickly
+        logger.info(f"Next run in {config.interval}s...")
+        elapsed = 0
+        while elapsed < config.interval and not shutdown:
+            time.sleep(min(5, config.interval - elapsed))
+            elapsed += 5
+
+    logger.info("Daemon stopped")
+    return 0
 
 
 if __name__ == "__main__":
