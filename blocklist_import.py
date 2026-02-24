@@ -1833,7 +1833,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 metrics.record_source_failure(
                     source_name=source.name,
                     error_type=result.error_type or "fetch",
-                    message=result.error_message,
+                    exc=result.error_exc,
                     duration=result.duration,
                 )
 
@@ -2128,10 +2128,10 @@ def fetch_abuseipdb_api(
 
     except requests.RequestException as e:
         logger.warning(f"AbuseIPDB API: unavailable ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(source=source, success=False, error_exc=e)
     except Exception as e:
         logger.error(f"AbuseIPDB API: unexpected error ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(source=source, success=False, error_exc=e)
 
 
 # =============================================================================
