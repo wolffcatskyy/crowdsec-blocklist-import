@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import json
 import logging
 import os
 import signal
@@ -1171,7 +1170,11 @@ def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
                 return (None, None)
             if str(ip) in EXCLUDED_IPS:
                 return (None, None)
-            return (str(ip), None)
+            ret = str(ip)
+            if ret.endswith(".0"):
+                value = f"{ret}/24"
+            else:
+                return (ret, None)
 
         if "/" in value:
             # Try parsing as network (CIDR)
