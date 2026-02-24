@@ -3,7 +3,7 @@
 **Real-time, deduplicated, normalized CrowdSec blocklists — instantly enforced across all your firewalls, CDNs, and network devices.**
 
 [![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
-[![Version](https://img.shields.io/badge/version-3.4.0-blue?style=flat-square)](https://github.com/wolffcatskyy/crowdsec-blocklist-import)
+[![Version](https://img.shields.io/badge/version-3.5.0-blue?style=flat-square)](https://github.com/wolffcatskyy/crowdsec-blocklist-import)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
 [![GHCR](https://img.shields.io/badge/GHCR-crowdsec--blocklist--import--python-blue?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import-python)
 
@@ -52,6 +52,12 @@ This is the difference between reactive security (waiting for alerts) and **acti
 
 **Allowlist Support** — Three-tier allowlist system: static IP lists, CIDR ranges, and provider-specific exceptions. Whitelist your ISP, CDN, or trusted partners.
 
+**Built-in Scheduler** — Run as a long-lived daemon with `INTERVAL=3600` instead of managing cron or systemd timers. Graceful shutdown on SIGTERM/SIGINT.
+
+**Webhook Notifications** — Get import results pushed to Discord, Slack, or any generic webhook endpoint.
+
+**AbuseIPDB Direct API** — Query AbuseIPDB's blacklist API directly with your API key for higher-quality results than the community mirror.
+
 **Prometheus Metrics** — Push metrics to Prometheus Pushgateway for monitoring imports, deduplication rates, and feed health.
 
 ---
@@ -77,7 +83,7 @@ cscli bouncers add blocklist-import -o raw
 services:
   blocklist-import:
     image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
-    restart: "no"
+    restart: unless-stopped
     networks:
       - crowdsec
     environment:
@@ -86,6 +92,7 @@ services:
       - CROWDSEC_MACHINE_ID=blocklist-import
       - CROWDSEC_MACHINE_PASSWORD=SecurePassword123
       - DECISION_DURATION=24h
+      - INTERVAL=3600           # Run every hour (built-in scheduler)
       - LOG_LEVEL=INFO
 
 networks:
@@ -96,10 +103,14 @@ networks:
 Run it:
 
 ```bash
-docker compose up --abort-on-container-exit
+docker compose up -d
 ```
 
-### 3. Schedule It (Cron)
+> **Note:** With `INTERVAL=3600`, the container runs as a long-lived daemon and repeats every hour. No cron or systemd timer needed. Set `INTERVAL=0` (default) for a single run.
+
+### 3. One-Shot Mode (Cron/Timer)
+
+If you prefer external scheduling, omit `INTERVAL` and use `restart: "no"`:
 
 ```bash
 # Daily at 4am
@@ -171,6 +182,11 @@ DECISION_DURATION=24h
 | `DECISION_TYPE` | `ban` | Type of decision (ban, captcha, throttle) |
 | `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARN, ERROR |
 | `DRY_RUN` | `false` | Preview without importing |
+| `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = once) |
+| `WEBHOOK_URL` | *(none)* | Webhook URL for import notifications |
+| `WEBHOOK_TYPE` | `generic` | Webhook format: `generic`, `discord`, `slack` |
+| `ABUSEIPDB_API_KEY` | *(none)* | AbuseIPDB API key for direct blacklist query |
+| `ABUSEIPDB_MIN_CONFIDENCE` | `90` | Minimum confidence score (1-100) |
 
 ### Selective Blocklists
 
@@ -247,6 +263,9 @@ Options:
   --validate                Validate configuration and exit
   --pushgateway-url URL     Override Prometheus Pushgateway URL
   --no-metrics              Disable Prometheus metrics for this run
+  --interval SECONDS        Daemon mode: repeat every N seconds
+  --webhook-url URL         Webhook URL for notifications
+  --webhook-type TYPE       Webhook format: generic, discord, slack
 ```
 
 ### Examples
@@ -284,6 +303,55 @@ ALLOWLIST="192.168.1.1,203.0.113.5,198.51.100.0/24"
 # Auto-fetch GitHub IP ranges (git, web, api, hooks, actions)
 ALLOWLIST_GITHUB=true
 ```
+
+### Daemon Mode (Built-in Scheduler)
+
+Run as a long-lived service instead of using cron:
+
+```bash
+# Run every hour
+INTERVAL=3600
+
+# Run every 30 minutes
+INTERVAL=1800
+
+# Skip the first run and wait for the interval
+RUN_ON_START=false
+```
+
+The daemon handles SIGTERM/SIGINT gracefully — it finishes the current run, then exits. This makes it Docker-friendly with `restart: unless-stopped`.
+
+### Webhook Notifications
+
+Get notified after each import run:
+
+```bash
+# Discord
+WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK
+WEBHOOK_TYPE=discord
+
+# Slack
+WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+WEBHOOK_TYPE=slack
+
+# Generic JSON POST
+WEBHOOK_URL=https://your-endpoint.example.com/webhook
+WEBHOOK_TYPE=generic
+```
+
+### AbuseIPDB Direct API
+
+Query the AbuseIPDB blacklist API directly for higher-quality results than the community mirror:
+
+```bash
+ABUSEIPDB_API_KEY=your_api_key_here
+ABUSEIPDB_MIN_CONFIDENCE=90   # Only IPs with 90%+ confidence
+ABUSEIPDB_LIMIT=10000         # Max IPs to fetch
+```
+
+Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
+
+> **Note:** The AbuseIPDB community mirror (via `ENABLE_ABUSE_IPDB`) is still fetched separately. The direct API provides more IPs with configurable confidence thresholds.
 
 ### Prometheus Metrics
 
