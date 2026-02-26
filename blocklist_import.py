@@ -364,6 +364,14 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         comment_char=";",
         extract_field=0,
     ),
+    # Spamhaus EDROP
+    BlocklistSource(
+        name="Spamhaus EDROP",
+        url="https://www.spamhaus.org/drop/edrop.txt",
+        enabled_key="enable_spamhaus",
+        comment_char=";",
+        extract_field=0,
+    ),
     # Blocklist.de
     BlocklistSource(
         name="Blocklist.de all",
@@ -1171,7 +1179,14 @@ def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
                 return (None, None)
             if str(ip) in EXCLUDED_IPS:
                 return (None, None)
-            return (str(ip), None)
+            ret = str(ip)
+            # IPv4 addresses ending in .0 are treated as /24 networks by CrowdSec,
+            # so we must explicitly add the CIDR notation for them to be accepted.
+            # See: https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/48
+            if isinstance(ip, ipaddress.IPv4Address) and ret.endswith(".0"):
+                value = f"{ret}/24"
+            else:
+                return (ret, None)
 
         if "/" in value:
             # Try parsing as network (CIDR)
@@ -1283,7 +1298,7 @@ def fetch_blocklist(
     Fetch and parse a single blocklist source.
 
     Returns (new_unique_ips, FetchResult).
-    FetchResult now carries duration, error_type, error_message and
+    FetchResult now carries duration, error_type, error_exc and
     per-token parse_errors so MetricsCollector can record full detail.
     """
     new_ips: list[str] = []
@@ -1508,10 +1523,9 @@ class CrowdSecLAPI:
         existing: Set[str] = set()
 
         try:
-            # Paginate through all decisions
-            # CrowdSec default limit is 100, we can increase
+            # Fetch all decisions at once using limit=0 (standard CrowdSec approach)
             response = self.session.get(
-                f"{self.base_url}/v1/decisions",
+                f"{self.base_url}/v1/decisions?limit=0",
                 headers=self.bouncer_headers,
                 timeout=60,
             )
@@ -1833,7 +1847,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 metrics.record_source_failure(
                     source_name=source.name,
                     error_type=result.error_type or "fetch",
-                    message=result.error_message,
+                    exc=result.error_exc,
                     duration=result.duration,
                 )
 
@@ -2128,10 +2142,10 @@ def fetch_abuseipdb_api(
 
     except requests.RequestException as e:
         logger.warning(f"AbuseIPDB API: unavailable ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(source=source, success=False, error_type="fetch", error_exc=e)
     except Exception as e:
         logger.error(f"AbuseIPDB API: unexpected error ({e})")
-        return new_ips, FetchResult(source=source, success=False, error=str(e))
+        return new_ips, FetchResult(source=source, success=False, error_type="fetch", error_exc=e)
 
 
 # =============================================================================
