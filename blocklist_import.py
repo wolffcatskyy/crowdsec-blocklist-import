@@ -81,6 +81,7 @@ VALID_ENABLE_VARS: set[str] = {
     "ENABLE_CYBERCRIME_TRACKER",
     "ENABLE_MONTY_SECURITY_C2",
     "ENABLE_VXVAULT",
+    "ENABLE_SENTINEL",
 }
 
 # Valid boolean string values (case-insensitive)
@@ -271,6 +272,7 @@ class Config:
     enable_cybercrime_tracker: bool = True
     enable_monty_security_c2: bool = True
     enable_vxvault: bool = True
+    enable_sentinel: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -332,6 +334,7 @@ class Config:
             enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER"),
             enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2"),
             enable_vxvault=get_bool("ENABLE_VXVAULT"),
+            enable_sentinel=get_bool("ENABLE_SENTINEL")
         )
 
 
@@ -347,6 +350,7 @@ class BlocklistSource:
     enabled_key: str
     comment_char: str = "#"
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
+    field_separator: str = " "
 
 # Define all blocklist sources
 BLOCKLIST_SOURCES: list[BlocklistSource] = [
@@ -523,6 +527,13 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         name="Maltrail scanners",
         url="https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
         enabled_key="enable_scanners",
+    ),
+    BlocklistSource(
+        name="Sentinel",
+        url="https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
+        enabled_key="enable_sentinel",
+        extract_field=0,
+        field_separator=","
     )
 ]
 
@@ -1226,7 +1237,7 @@ def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource)
 
     # Extract specific field if configured
     if source.extract_field is not None:
-        parts = line.split()
+        parts = line.split(source.field_separator)
         if len(parts) > source.extract_field:
             line = parts[source.extract_field]
 
