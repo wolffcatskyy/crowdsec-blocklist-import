@@ -245,6 +245,7 @@ class Config:
 
     # AbuseIPDB direct API
     abuseipdb_api_key: str = ""
+    abuseipdb_api_key_file: str = ""
     abuseipdb_min_confidence: int = 90
     abuseipdb_limit: int = 10000
 
@@ -311,6 +312,7 @@ class Config:
             webhook_url=os.getenv("WEBHOOK_URL", ""),
             webhook_type=os.getenv("WEBHOOK_TYPE", "generic").lower(),
             abuseipdb_api_key=os.getenv("ABUSEIPDB_API_KEY", ""),
+            abuseipdb_api_key_file=os.getenv("ABUSEIPDB_API_KEY_FILE", ""),
             abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
@@ -1895,10 +1897,15 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             metrics.record_source_success("Censys", added, time.time() - t0)
 
     # Fetch AbuseIPDB direct API (if API key is configured)
-    if config.abuseipdb_api_key and config.enable_abuseipdb:
+    abuseipdb_api_key = config.abuseipdb_api_key
+    if config.abuseipdb_api_key_file:
+        abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
+        logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
+    if abuseipdb_api_key and config.enable_abuseipdb:
         log_separator(logger)
         abuseipdb_ips, abuseipdb_result = fetch_abuseipdb_api(
             config=config,
+            abuseipdb_api_key=abuseipdb_api_key,
             session=session,
             seen_ips=seen_ips,
             allowlist=allowlist,
@@ -2078,6 +2085,7 @@ def _format_generic_webhook(stats: "ImportStats") -> dict:
 
 def fetch_abuseipdb_api(
     config: Config,
+    abuseipdb_api_key: str,
     session: requests.Session,
     seen_ips: Set[str],
     allowlist: "Allowlist",
@@ -2098,7 +2106,7 @@ def fetch_abuseipdb_api(
 
     new_ips: list[str] = []
 
-    if not config.abuseipdb_api_key:
+    if not abuseipdb_api_key:
         return new_ips, FetchResult(source=source, success=True, ip_count=0)
 
     try:
@@ -2107,7 +2115,7 @@ def fetch_abuseipdb_api(
         response = session.get(
             "https://api.abuseipdb.com/api/v2/blacklist",
             headers={
-                "Key": config.abuseipdb_api_key,
+                "Key": abuseipdb_api_key,
                 "Accept": "text/plain",
             },
             params={
