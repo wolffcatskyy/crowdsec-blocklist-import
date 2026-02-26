@@ -1253,6 +1253,7 @@ def create_http_session(max_retries: int = 3) -> requests.Session:
 
     retry_strategy = Retry(
         total=max_retries,
+        respect_retry_after_header=False,
         backoff_factor=1,  # 1s, 2s, 4s...
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "POST", "DELETE"],
