@@ -222,7 +222,7 @@ crowdsec-blocklist-import pulls from 24+ threat intelligence sources:
 | Source | Purpose | Type |
 |--------|---------|------|
 | **IPsum** | Aggregated threat intel (IPs on 3+ blocklists) | Aggregated |
-| **Spamhaus DROP/EDROP** | Known hijacked networks | Network blocks |
+| **Spamhaus DROP** | Known hijacked networks | Network blocks |
 | **Blocklist.de** | SSH, web, mail attacks (all categories) | Attack vectors |
 | **Firehol Level 1/2/3** | Malware, C2, compromised hosts | Malware |
 | **Abuse.ch** | Feodo (banking malware), SSL blacklist, URLhaus | Malware |

@@ -452,8 +452,7 @@ networks:
 | `ENABLE_TOR` | Tor exit nodes |
 | `ENABLE_SCANNERS` | Shodan/Censys/Maltrail scanners |
 | `ENABLE_IPSUM` | IPsum aggregated threat intel |
-| `ENABLE_SPAMHAUS_DROP` | Spamhaus DROP |
-| `ENABLE_SPAMHAUS_EDROP` | Spamhaus EDROP |
+| `ENABLE_SPAMHAUS` | Spamhaus DROP |
 | `ENABLE_FIREHOL_L1` | Firehol Level 1 |
 | `ENABLE_FIREHOL_L2` | Firehol Level 2 |
 | `ENABLE_FIREHOL_L3` | Firehol Level 3 |
