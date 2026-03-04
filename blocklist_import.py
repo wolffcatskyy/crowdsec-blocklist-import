@@ -248,6 +248,9 @@ class Config:
     abuseipdb_min_confidence: int = 90
     abuseipdb_limit: int = 10000
 
+    # Alert consolidation (reduces alert count for free-tier CrowdSec users)
+    consolidate_alerts: bool = False
+
     # Provider allowlists
     allowlist_github: bool = False
 
@@ -294,6 +297,7 @@ class Config:
             decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
             decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
             allow_list=[ l.strip() for l in os.getenv("ALLOWLIST", "").split(",") if l.strip() ],
+            consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
             allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
             custom_block_lists=[ l.strip() for l in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if l.strip() ],
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
@@ -1685,6 +1689,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     logger.info(f"LAPI URL: {config.lapi_url}")
     logger.info(f"Machine ID: {config.machine_id}")
 
+    if config.consolidate_alerts:
+        logger.info("CONSOLIDATE_ALERTS enabled - batching all sources into fewer alerts")
+
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
 
@@ -1781,6 +1788,15 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if not batch:
             return 0, 0
 
+        # When consolidating alerts, use generic reason/scenario (no source suffix)
+        # to reduce the number of distinct alerts created in CrowdSec
+        if config.consolidate_alerts:
+            reason = config.decision_reason
+            scenario = config.decision_scenario
+        else:
+            reason = f"{config.decision_reason} ({source_name})"
+            scenario = f"{config.decision_scenario} ({source_name})"
+
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(batch)} IPs")
             stats.imported_ok += len(batch)
@@ -1789,10 +1805,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             ok, failed = lapi.add_decisions(
                 ips=batch,
                 duration=config.decision_duration,
-                reason=f"{config.decision_reason} ({source_name})",
+                reason=reason,
                 decision_type=config.decision_type,
                 origin=config.decision_origin,
-                scenario=f"{config.decision_scenario} ({source_name})",
+                scenario=scenario,
             )
             stats.imported_ok += ok
             stats.imported_failed += failed
@@ -1861,10 +1877,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 source_ok += ok
                 source_failed += failed
 
-        # Flush any remaining IPs
-        ok, failed = flush_batch(source.name)
-        source_ok += ok
-        source_failed += failed
+        # Flush any remaining IPs at source boundary (skip when consolidating)
+        if not config.consolidate_alerts:
+            ok, failed = flush_batch(source.name)
+            source_ok += ok
+            source_failed += failed
         log_batch_stats(source_ok, source_failed, batch_cnt)
 
     # Static scanner IPs (Censys)
@@ -1881,8 +1898,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 stats.total_ips_fetched += 1
                 added += 1
         stats.sources_ok += 1
-        ok, failed = flush_batch("Censys")
-        log_batch_stats(ok, failed, 1)
+        if not config.consolidate_alerts:
+            ok, failed = flush_batch("Censys")
+            log_batch_stats(ok, failed, 1)
         if metrics:
             metrics.record_source_success("Censys", added, time.time() - t0)
 
@@ -1910,7 +1928,13 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             if len(batch) >= config.batch_size:
                 ok, failed = flush_batch("AbuseIPDB API")
                 log_batch_stats(ok, failed, 1)
-        ok, failed = flush_batch("AbuseIPDB API")
+        if not config.consolidate_alerts:
+            ok, failed = flush_batch("AbuseIPDB API")
+            log_batch_stats(ok, failed, 1)
+
+    # When consolidating alerts, flush any remaining IPs as one final batch
+    if config.consolidate_alerts and batch:
+        ok, failed = flush_batch("consolidated")
         log_batch_stats(ok, failed, 1)
 
     stats.duration_seconds = time.time() - start_time
@@ -2181,6 +2205,7 @@ Environment Variables:
   METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
   INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0)
   RUN_ON_START             In daemon mode, run immediately on start (default: true)
+  CONSOLIDATE_ALERTS       Batch all sources into fewer alerts (default: false)
   WEBHOOK_URL              Webhook URL for notifications (Discord/Slack/generic)
   WEBHOOK_TYPE             Webhook format: generic, discord, slack (default: generic)
   ABUSEIPDB_API_KEY        AbuseIPDB API key for direct blacklist queries
@@ -2278,6 +2303,12 @@ cause the program to exit with an error. Unknown ENABLE_* variables
     )
 
     parser.add_argument(
+        "--consolidate-alerts",
+        action="store_true",
+        help="Batch all sources into fewer alerts (saves alert quota for free-tier CrowdSec)",
+    )
+
+    parser.add_argument(
         "--interval",
         type=int,
         metavar="SECONDS",
@@ -2328,6 +2359,8 @@ def main() -> int:
         config.webhook_url = args.webhook_url
     if args.webhook_type:
         config.webhook_type = args.webhook_type
+    if args.consolidate_alerts:
+        config.consolidate_alerts = True
 
     # Setup logging
     logger = setup_logging(config)
