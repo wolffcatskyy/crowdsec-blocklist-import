@@ -1,10 +1,10 @@
 # crowdsec-blocklist-import Examples
 
-Real-world deployment examples for crowdsec-blocklist-import v3.4.0.
+Real-world deployment examples for crowdsec-blocklist-import v3.5.0.
 
-> **Important:** This tool runs once and exits. It does not have a built-in scheduler
-> or daemon mode. Use cron, Kubernetes CronJob, or Synology Task Scheduler to run it
-> on a recurring basis.
+> **Tip:** As of v3.5.0, the tool supports built-in daemon mode via the `INTERVAL`
+> env var (e.g., `INTERVAL=4h`). You can still use cron, Kubernetes CronJob, or
+> Synology Task Scheduler if you prefer external scheduling.
 
 ---
 

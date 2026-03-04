@@ -323,10 +323,16 @@ detect_crowdsec
 
 if [ "$CS_MODE" = "native" ]; then
     setup_native
-    # Native mode: just run import.sh directly
-    info "For native installs, run directly:"
-    echo "  curl -sL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/import.sh | \\"
-    echo "    CROWDSEC_LAPI_URL=$CS_LAPI_URL CROWDSEC_MACHINE_ID=$MACHINE_ID CROWDSEC_MACHINE_PASSWORD=$MACHINE_PASS bash"
+    # Native mode: run the Python importer directly
+    info "For native installs, run the Python importer directly:"
+    echo ""
+    echo "  git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git"
+    echo "  cd crowdsec-blocklist-import"
+    echo "  pip install -r requirements.txt"
+    echo "  CROWDSEC_LAPI_URL=$CS_LAPI_URL CROWDSEC_MACHINE_ID=$MACHINE_ID CROWDSEC_MACHINE_PASSWORD=$MACHINE_PASS python3 blocklist_import.py"
+    echo ""
+    info "Or use daemon mode (runs on a schedule automatically):"
+    echo "  INTERVAL=4h CROWDSEC_LAPI_URL=$CS_LAPI_URL CROWDSEC_MACHINE_ID=$MACHINE_ID CROWDSEC_MACHINE_PASSWORD=$MACHINE_PASS python3 blocklist_import.py"
     exit 0
 fi
 

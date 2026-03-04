@@ -96,28 +96,32 @@ docker run --rm \
 ### Testing Directly
 
 ```bash
-chmod +x import.sh
-LOG_LEVEL=DEBUG DRY_RUN=true MODE=docker CROWDSEC_CONTAINER=crowdsec ./import.sh
+# Install dependencies
+pip install -r requirements.txt
+
+# Run with debug output
+LOG_LEVEL=DEBUG DRY_RUN=true python3 blocklist_import.py
 ```
 
 ---
 
 ## Project Architecture
 
-This is a **single-file bash tool** (`import.sh`, ~620 lines):
+This is a **single-file Python tool** (`blocklist_import.py`):
 
-- **Config**: Environment variables at the top (lines 10-35)
-- **Logging**: `log()`, `debug()`, `info()`, `warn()`, `error()` functions
-- **Source control**: `normalize_source_name()`, `is_source_enabled()`, `show_source_overrides()`
-- **Statistics**: `record_stat()`, `show_stats()` — per-source IP count tracking
-- **CrowdSec access**: `run_cscli()`, `run_cscli_stdin()` — Docker exec / native abstraction
-- **Auto-detection**: `find_crowdsec_container()`, `setup_crowdsec()` — mode selection
-- **Fetching**: `fetch_list()` — download and filter individual blocklists
-- **Pipeline**: `main()` — orchestrates fetch → combine → dedup → filter → import
+- **Config**: Environment variables and `.env` file support
+- **Logging**: Structured logging with configurable `LOG_LEVEL`
+- **Source control**: `BlocklistSource` dataclass, `ENABLE_*` env var toggles per source
+- **Statistics**: Per-source metrics via `FetchResult` dataclass, Prometheus push support
+- **CrowdSec access**: LAPI client with machine and bouncer authentication
+- **Fetching**: `fetch_blocklist()`, `fetch_abuseipdb_api()` — download, parse, and filter
+- **Pipeline**: Fetch → deduplicate → allowlist filter → batch import via LAPI
+- **Daemon mode**: Built-in scheduler (`INTERVAL` env var) with graceful signal handling
+- **Webhooks**: Discord, Slack, or generic JSON POST notifications after each run
 
-**Runtime**: Docker image based on `docker:24-cli` (Alpine). Dependencies: `bash`, `curl`, `coreutils`.
+**Runtime**: Docker image based on `python:3.11-slim`. Dependencies: `requests`, `python-dotenv`, `prometheus-client`.
 
-**Key constraint**: Single file, no new dependencies, works in both Docker and native mode.
+**Key constraint**: Single file, works in both Docker and native mode.
 
 ---
 
@@ -170,27 +174,21 @@ Closes #XX
 
 ## Code Style
 
-```bash
+```python
 # Clear variable names
-CROWDSEC_CONTAINER_NAME="crowdsec"
+CROWDSEC_LAPI_URL = os.getenv("CROWDSEC_LAPI_URL", "")
 
-# Use the project's log helpers
-error "Critical issue"       # Always shown
-warn  "Non-critical issue"   # Warning, continue
-info  "Informational"        # Normal logging
-debug "Detailed info"        # LOG_LEVEL=DEBUG only
-
-# Always check for errors
-if ! command; then
-    error "Descriptive message"
-    return 1
-fi
+# Use the project's logging
+logger.error("Critical issue")       # Always shown
+logger.warning("Non-critical issue") # Warning, continue
+logger.info("Informational")         # Normal logging
+logger.debug("Detailed info")        # LOG_LEVEL=DEBUG only
 ```
 
 ### Key Rules
 
-- **Single file** — `import.sh` must remain self-contained
-- **No new dependencies** — bash, curl, and coreutils only
+- **Single file** — `blocklist_import.py` must remain self-contained
+- **Minimal dependencies** — `requests`, `python-dotenv`, `prometheus-client` only
 - **Both modes** — changes must work in Docker and native mode
 - **Idempotent** — running twice should import 0 IPs the second time
 - **Graceful failure** — individual blocklist failures are logged, not fatal
@@ -203,7 +201,7 @@ fi
 
 **What if my PR is rejected?** We'll explain why and suggest improvements.
 
-**How do I add a new blocklist source?** Add a `fetch_list` call in `main()` following the existing pattern.
+**How do I add a new blocklist source?** Add a new `BlocklistSource` entry to the `SOURCES` list in `blocklist_import.py` following the existing pattern.
 
 ---
 

@@ -511,8 +511,8 @@ For issues not covered here, see the full [Troubleshooting Guide](troubleshootin
 
 ## Version Information
 
-- **Current stable:** v3.4.0
-- **Upcoming:** v3.5.0 (notifications + scheduling), v4.0.0 (IPv6 + AbuseIPDB)
-- **Deprecated:** bash (import.sh)
+- **Current stable:** v3.5.0 (daemon mode, webhooks, AbuseIPDB API)
+- **Upcoming:** v4.0.0 (full IPv6 support)
+- **Deprecated:** bash (`import.sh` — will be removed in a future release)
 
 Check [Releases](https://github.com/wolffcatskyy/crowdsec-blocklist-import/releases) for latest version.
