@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import json
 import logging
 import os
 import signal
@@ -293,9 +292,9 @@ class Config:
             decision_type=os.getenv("DECISION_TYPE", "ban"),
             decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
             decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
-            allow_list=[ l.strip() for l in os.getenv("ALLOWLIST", "").split(",") if l.strip() ],
+            allow_list=[x.strip() for x in os.getenv("ALLOWLIST", "").split(",") if x.strip()],
             allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
-            custom_block_lists=[ l.strip() for l in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if l.strip() ],
+            custom_block_lists=[x.strip() for x in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if x.strip()],
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
             fetch_timeout=int(os.getenv("FETCH_TIMEOUT", "60")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
@@ -347,6 +346,7 @@ class BlocklistSource:
     enabled_key: str
     comment_char: str = "#"
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
+
 
 # Define all blocklist sources
 BLOCKLIST_SOURCES: list[BlocklistSource] = [
@@ -574,28 +574,28 @@ def list_blocklist_sources(logger: logging.Logger) -> None:
 # sanitize_error_message() before using it as a label value.
 
 _ERROR_PATTERNS: list[tuple[str, str]] = [
-    # requests / urllib3 transport errors — checked against class name first
-    ("ConnectionError",         "connection_error"),
-    ("ConnectTimeout",          "connect_timeout"),
-    ("ReadTimeout",             "read_timeout"),
-    ("Timeout",                 "timeout"),
-    ("SSLError",                "ssl_error"),
-    ("TooManyRedirects",        "too_many_redirects"),
-    ("ChunkedEncodingError",    "chunked_encoding_error"),
-    ("ContentDecodingError",    "content_decoding_error"),
+    # requests / urllib3 transport errors -- checked against class name first
+    ("ConnectionError", "connection_error"),
+    ("ConnectTimeout", "connect_timeout"),
+    ("ReadTimeout", "read_timeout"),
+    ("Timeout", "timeout"),
+    ("SSLError", "ssl_error"),
+    ("TooManyRedirects", "too_many_redirects"),
+    ("ChunkedEncodingError", "chunked_encoding_error"),
+    ("ContentDecodingError", "content_decoding_error"),
     # HTTP status codes embedded in HTTPError messages
-    ("404",                     "http_404"),
-    ("403",                     "http_403"),
-    ("429",                     "http_429"),
-    ("500",                     "http_500"),
-    ("502",                     "http_502"),
-    ("503",                     "http_503"),
-    ("504",                     "http_504"),
-    ("HTTPError",               "http_error"),
+    ("404", "http_404"),
+    ("403", "http_403"),
+    ("429", "http_429"),
+    ("500", "http_500"),
+    ("502", "http_502"),
+    ("503", "http_503"),
+    ("504", "http_504"),
+    ("HTTPError", "http_error"),
     # Misc
-    ("UnicodeDecodeError",      "unicode_decode_error"),
-    ("JSONDecodeError",         "json_decode_error"),
-    ("ValueError",              "value_error"),
+    ("UnicodeDecodeError", "unicode_decode_error"),
+    ("JSONDecodeError", "json_decode_error"),
+    ("ValueError", "value_error"),
 ]
 
 
@@ -760,7 +760,7 @@ class MetricsCollector:
             "Number of unique new IPs fetched from each source in the last run",
             ["source"],
             registry=self.registry,
-            )
+        )
 
         self.source_duration_seconds = Gauge(
             "blocklist_import_source_duration_seconds",
@@ -782,7 +782,7 @@ class MetricsCollector:
         self.source_duration_seconds.labels(source=source_name).set(duration)
 
     def record_source_failure(self, source_name: str, error_type: str,
-                               exc: Optional[Exception], duration: float) -> None:
+                              exc: Optional[Exception], duration: float) -> None:
         """
         Record a failed source fetch.
 
@@ -1950,7 +1950,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     if stats.new_ips == 0:
         logger.info(
-            f"No new IPs to import (all IPs already in CrowdSec)"
+            "No new IPs to import (all IPs already in CrowdSec)"
         )
     else:
         logger.info(
