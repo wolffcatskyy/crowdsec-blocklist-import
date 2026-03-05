@@ -1311,26 +1311,21 @@ class TestFetchAbuseIPDB:
         session_mock.get.assert_not_called()
 
     def test_network_error_returns_failure(self, logger, session_mock):
-        """On network error, fetch_abuseipdb_api returns an empty list and failed result.
-
-        NOTE: The current source code has a bug in the error return path — it passes
-        ``error=str(e)`` to FetchResult but the dataclass field is named ``error_exc``.
-        This raises a TypeError which we document here as an xfail until fixed.
-        The correct fix is to change ``error=str(e)`` to ``error_exc=e`` in both
-        except blocks of fetch_abuseipdb_api().
-        """
+        """On network error, fetch_abuseipdb_api returns an empty list and failed result."""
         cfg = self._make_config()
         import requests
         session_mock.get.side_effect = requests.RequestException("timeout")
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        # The source has a bug: FetchResult is called with unknown kwarg 'error'
-        with pytest.raises(TypeError, match="unexpected keyword argument 'error'"):
-            fetch_abuseipdb_api(cfg, session_mock, seen, allowlist, stats, logger)
+        new_ips, result = fetch_abuseipdb_api(cfg, session_mock, seen, allowlist, stats, logger)
+        assert new_ips == []
+        assert result.success is False
+        assert result.error_type == "fetch"
+        assert result.error_exc is not None
 
     def test_http_error_returns_failure(self, logger, session_mock):
-        """On HTTP error, fetch_abuseipdb_api raises due to source bug (see above)."""
+        """On HTTP error, fetch_abuseipdb_api returns an empty list and failed result."""
         cfg = self._make_config()
         import requests
         resp = Mock()
@@ -1340,9 +1335,11 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        # Same bug as test_network_error_returns_failure: 'error' kwarg not in FetchResult
-        with pytest.raises(TypeError, match="unexpected keyword argument 'error'"):
-            fetch_abuseipdb_api(cfg, session_mock, seen, allowlist, stats, logger)
+        new_ips, result = fetch_abuseipdb_api(cfg, session_mock, seen, allowlist, stats, logger)
+        assert new_ips == []
+        assert result.success is False
+        assert result.error_type == "fetch"
+        assert result.error_exc is not None
 
     def test_confidence_params_passed(self, logger, session_mock):
         """Confidence and limit are forwarded as query params."""
