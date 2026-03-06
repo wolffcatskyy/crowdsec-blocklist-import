@@ -82,6 +82,7 @@ Controls import behavior, performance, and output formatting.
 | MAX_RETRIES | `3` | Retry count on failed imports | `1`, `5`, `10` |
 | LOG_LEVEL | `INFO` | Logging verbosity level | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | DRY_RUN | `false` | Preview import without applying decisions | `true`, `false` |
+| CONSOLIDATE_ALERTS | `false` | Combine all IPs into a single CrowdSec alert per run | `true`, `false` |
 
 ### Notes on Processing Configuration
 
@@ -90,6 +91,7 @@ Controls import behavior, performance, and output formatting.
 - **MAX_RETRIES:** Number of times to retry failed imports before skipping the blocklist
 - **LOG_LEVEL:** `DEBUG` produces verbose output useful for troubleshooting; `WARN` and `ERROR` minimize output
 - **DRY_RUN:** Validates configuration and shows what would be imported without modifying decisions
+- **CONSOLIDATE_ALERTS:** When enabled, all IPs from all sources are sent in a single alert instead of one alert per source batch. This dramatically reduces alert count on the CrowdSec console, which is important for users on the free tier (500 alerts/month limit). Trade-off: per-source scenario tracking is replaced with a generic "all sources" label.
 
 ---
 

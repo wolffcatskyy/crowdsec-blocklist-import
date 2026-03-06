@@ -185,6 +185,7 @@ DECISION_DURATION=24h
 | `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = once) |
 | `WEBHOOK_URL` | *(none)* | Webhook URL for import notifications |
 | `WEBHOOK_TYPE` | `generic` | Webhook format: `generic`, `discord`, `slack` |
+| `CONSOLIDATE_ALERTS` | `false` | Send all IPs in a single alert per run (saves alert quota) |
 | `ABUSEIPDB_API_KEY` | *(none)* | AbuseIPDB API key for direct blacklist query |
 | `ABUSEIPDB_MIN_CONFIDENCE` | `90` | Minimum confidence score (1-100) |
 

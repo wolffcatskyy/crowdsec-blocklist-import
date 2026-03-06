@@ -252,6 +252,9 @@ class Config:
     # Provider allowlists
     allowlist_github: bool = False
 
+    # Alert consolidation (reduce CrowdSec console alert count)
+    consolidate_alerts: bool = False
+
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
@@ -316,6 +319,7 @@ class Config:
             abuseipdb_api_key_file=os.getenv("ABUSEIPDB_API_KEY_FILE", ""),
             abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
+            consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
@@ -1782,6 +1786,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     # Process blocklists and batch import
     batch: list[str] = []
+    # When consolidate_alerts is enabled, defer all IPs for a single alert at end of run
+    deferred_ips: list[str] = []
+
+    if config.consolidate_alerts:
+        logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
 
     def log_batch_stats(ok: int, failed: int, batch_cnt: int):
         if ok > 0:
@@ -1790,10 +1799,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.warning(f"Failed to import {failed} IPs")
 
     def flush_batch(source_name: str) -> tuple[int, int]:
-        """Import the current batch to CrowdSec."""
+        """Import the current batch to CrowdSec (or defer if consolidating)."""
         nonlocal batch
         if not batch:
             return 0, 0
+
+        if config.consolidate_alerts:
+            # Defer IPs for a single consolidated alert at end of run
+            count = len(batch)
+            deferred_ips.extend(batch)
+            batch = []
+            return count, 0
 
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(batch)} IPs")
@@ -1931,6 +1947,40 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 log_batch_stats(ok, failed, 1)
         ok, failed = flush_batch("AbuseIPDB API")
         log_batch_stats(ok, failed, 1)
+
+    # Flush consolidated alert (single alert for all sources)
+    if config.consolidate_alerts and deferred_ips:
+        logger.info(f"Sending consolidated alert with {len(deferred_ips)} IPs from all sources")
+        if config.dry_run:
+            logger.debug(f"DRY RUN: Would import {len(deferred_ips)} IPs in single alert")
+            stats.imported_ok += len(deferred_ips)
+        else:
+            # Send all deferred IPs in batches but under a single generic source label
+            consolidated_reason = f"{config.decision_reason} (all sources)"
+            consolidated_scenario = f"{config.decision_scenario} (all sources)"
+            remaining = deferred_ips
+            while remaining:
+                chunk = remaining[:config.batch_size]
+                remaining = remaining[config.batch_size:]
+                ok, failed = lapi.add_decisions(
+                    ips=chunk,
+                    duration=config.decision_duration,
+                    reason=consolidated_reason,
+                    decision_type=config.decision_type,
+                    origin=config.decision_origin,
+                    scenario=consolidated_scenario,
+                )
+                stats.imported_ok += ok
+                stats.imported_failed += failed
+
+                if failed > 0 and metrics:
+                    metrics.errors_total.labels(
+                        error_type="import",
+                        source="consolidated",
+                        message="lapi_write_failure",
+                    ).set(failed)
+
+        logger.info(f"Consolidated alert: {stats.imported_ok} IPs imported")
 
     stats.duration_seconds = time.time() - start_time
 

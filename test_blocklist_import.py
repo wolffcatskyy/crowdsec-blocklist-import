@@ -146,6 +146,7 @@ class TestConfigFromEnv:
         assert cfg.abuseipdb_min_confidence == 90
         assert cfg.abuseipdb_limit == 10000
         assert cfg.allowlist_github is False
+        assert cfg.consolidate_alerts is False
         # All sources enabled by default
         assert cfg.enable_ipsum is True
         assert cfg.enable_spamhaus is True
@@ -227,6 +228,16 @@ class TestConfigFromEnv:
         cfg = Config.from_env()
         assert "http://a.com/list.txt" in cfg.custom_block_lists
         assert "http://b.com/list.txt" in cfg.custom_block_lists
+
+    def test_consolidate_alerts(self, clean_env):
+        clean_env.setenv("CONSOLIDATE_ALERTS", "true")
+        cfg = Config.from_env()
+        assert cfg.consolidate_alerts is True
+
+    def test_consolidate_alerts_default_false(self, clean_env, monkeypatch):
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.consolidate_alerts is False
 
     def test_abuseipdb_settings(self, clean_env):
         clean_env.setenv("ABUSEIPDB_API_KEY", "abc123")
