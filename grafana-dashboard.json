@@ -23,6 +23,19 @@
   "links": [],
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "📊 Summary",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -47,10 +60,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
+        "h": 5,
+        "w": 4.8,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "id": 1,
       "options": {
@@ -58,6 +71,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
+        "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -65,6 +79,7 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "textMode": "auto",
         "wideLayout": true
       },
@@ -80,7 +95,7 @@
           "refId": "A"
         }
       ],
-      "title": "Total IPs Imported (last 24h peak)",
+      "title": "Total IPs (24h peak)",
       "type": "stat"
     },
     {
@@ -108,10 +123,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 6,
-        "y": 0
+        "h": 5,
+        "w": 4.8,
+        "x": 4.8,
+        "y": 1
       },
       "id": 2,
       "options": {
@@ -119,6 +134,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
+        "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -126,6 +142,7 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "textMode": "auto",
         "wideLayout": true
       },
@@ -141,7 +158,7 @@
           "refId": "A"
         }
       ],
-      "title": "New IPs Added (last run)",
+      "title": "New IPs (last run)",
       "type": "stat"
     },
     {
@@ -179,17 +196,18 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 0
+        "h": 5,
+        "w": 4.8,
+        "x": 9.6,
+        "y": 1
       },
       "id": 3,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
+        "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -197,6 +215,7 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "textMode": "auto",
         "wideLayout": true
       },
@@ -207,12 +226,12 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "clamp_max(blocklist_import_sources_successful / blocklist_import_sources_enabled, 1)",
+          "expr": "clamp_max(blocklist_import_sources_successful / (blocklist_import_sources_successful + blocklist_import_sources_failed), 1)",
           "instant": true,
           "refId": "A"
         }
       ],
-      "title": "Success Rate",
+      "title": "Source Success Rate",
       "type": "stat"
     },
     {
@@ -248,17 +267,18 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
-        "y": 0
+        "h": 5,
+        "w": 4.8,
+        "x": 14.4,
+        "y": 1
       },
       "id": 4,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
+        "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -266,6 +286,7 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "textMode": "auto",
         "wideLayout": true
       },
@@ -283,6 +304,90 @@
       ],
       "title": "Time Since Last Run",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4.8,
+        "x": 19.2,
+        "y": 1
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.3.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(blocklist_import_errors_total)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Total Errors (cumulative)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 101,
+      "panels": [],
+      "title": "📈 Trends Over Time",
+      "type": "row"
     },
     {
       "datasource": {
@@ -346,7 +451,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "id": 5,
       "options": {
@@ -372,7 +477,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_total_ips",
           "instant": false,
           "legendFormat": "Total IPs",
@@ -384,7 +488,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_new_ips",
           "instant": false,
           "legendFormat": "New IPs",
@@ -488,7 +591,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 7
       },
       "id": 6,
       "options": {
@@ -513,7 +616,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_sources_successful",
           "instant": false,
           "legendFormat": "Successful",
@@ -525,7 +627,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_sources_failed",
           "instant": false,
           "legendFormat": "Failed",
@@ -533,7 +634,7 @@
           "refId": "B"
         }
       ],
-      "title": "Sources Status (Successful vs Failed) — Stacked",
+      "title": "Sources Status (Successful vs Failed)",
       "type": "timeseries"
     },
     {
@@ -550,6 +651,10 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "none",
@@ -566,6 +671,7 @@
               "type": "linear"
             },
             "showPoints": "auto",
+            "showValues": false,
             "spanNulls": false,
             "stacking": {
               "group": "A",
@@ -593,7 +699,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 16
       },
       "id": 11,
       "options": {
@@ -619,7 +725,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_existing_decisions",
           "instant": false,
           "legendFormat": "Existing Decisions",
@@ -638,15 +743,19 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "fixed",
-            "fixedColor": "orange"
+            "fixedColor": "orange",
+            "mode": "fixed"
           },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
             "drawStyle": "bars",
-            "fillOpacity": 80,
+            "fillOpacity": 100,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -661,6 +770,7 @@
               "type": "linear"
             },
             "showPoints": "never",
+            "showValues": false,
             "spanNulls": false,
             "stacking": {
               "group": "A",
@@ -696,7 +806,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 15
+        "y": 16
       },
       "id": 12,
       "options": {
@@ -723,7 +833,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
           "expr": "blocklist_import_duration_seconds_sum / blocklist_import_duration_seconds_count",
           "instant": false,
           "legendFormat": "Avg Duration (s)",
@@ -748,6 +857,10 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
             "drawStyle": "bars",
             "fillOpacity": 80,
             "gradientMode": "none",
@@ -764,6 +877,7 @@
               "type": "linear"
             },
             "showPoints": "never",
+            "showValues": false,
             "spanNulls": false,
             "stacking": {
               "group": "A",
@@ -799,7 +913,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 15
+        "y": 16
       },
       "id": 13,
       "options": {
@@ -825,16 +939,28 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "editorMode": "code",
-          "expr": "blocklist_import_errors_total",
+          "expr": "sum by (error_type, source) (round(increase(blocklist_import_errors_total[$__rate_interval]))) > 0",
           "instant": false,
-          "legendFormat": "{{error_type}}",
+          "legendFormat": "{{error_type}} — {{source}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Total Errors Over Time (by type)",
+      "title": "New Errors Per Run (by type & source)",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 102,
+      "panels": [],
+      "title": "🔍 Per-Source Detail",
+      "type": "row"
     },
     {
       "datasource": {
@@ -852,6 +978,9 @@
               "type": "auto"
             },
             "filterable": true,
+            "footer": {
+              "reducers": []
+            },
             "inspect": false,
             "minWidth": 100
           },
@@ -879,7 +1008,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 340
+                "value": 280
               },
               {
                 "id": "custom.cellOptions",
@@ -902,32 +1031,32 @@
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background",
-                  "mode": "basic"
+                  "mode": "basic",
+                  "type": "color-background"
                 }
               },
               {
                 "id": "mappings",
                 "value": [
                   {
-                    "type": "value",
                     "options": {
                       "failed": {
-                        "text": "FAILED",
                         "color": "red",
-                        "index": 0
+                        "index": 0,
+                        "text": "FAILED"
                       }
-                    }
+                    },
+                    "type": "value"
                   },
                   {
-                    "type": "value",
                     "options": {
                       "success": {
-                        "text": "OK",
                         "color": "green",
-                        "index": 1
+                        "index": 1,
+                        "text": "OK"
                       }
-                    }
+                    },
+                    "type": "value"
                   }
                 ]
               }
@@ -957,7 +1086,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 110
+                "value": 120
               },
               {
                 "id": "unit",
@@ -966,8 +1095,8 @@
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background",
-                  "mode": "basic"
+                  "mode": "basic",
+                  "type": "color-background"
                 }
               },
               {
@@ -981,11 +1110,11 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 30
+                      "value": 0.03
                     },
                     {
                       "color": "red",
-                      "value": 60
+                      "value": 0.06
                     }
                   ]
                 }
@@ -996,9 +1125,9 @@
       },
       "gridPos": {
         "h": 10,
-        "w": 24,
+        "w": 9,
         "x": 0,
-        "y": 23
+        "y": 25
       },
       "id": 14,
       "options": {
@@ -1014,8 +1143,8 @@
         "showHeader": true,
         "sortBy": [
           {
-            "desc": false,
-            "displayName": "Status"
+            "desc": true,
+            "displayName": "IPs"
           }
         ]
       },
@@ -1028,10 +1157,10 @@
           },
           "editorMode": "code",
           "expr": "blocklist_import_source_status",
+          "format": "table",
           "instant": true,
           "legendFormat": "__auto",
-          "refId": "A",
-          "format": "table"
+          "refId": "A"
         },
         {
           "datasource": {
@@ -1040,10 +1169,10 @@
           },
           "editorMode": "code",
           "expr": "blocklist_import_source_ips",
+          "format": "table",
           "instant": true,
           "legendFormat": "__auto",
-          "refId": "B",
-          "format": "table"
+          "refId": "B"
         },
         {
           "datasource": {
@@ -1052,13 +1181,13 @@
           },
           "editorMode": "code",
           "expr": "blocklist_import_source_duration_seconds",
+          "format": "table",
           "instant": true,
           "legendFormat": "__auto",
-          "refId": "C",
-          "format": "table"
+          "refId": "C"
         }
       ],
-      "title": "All Sources — Status, IPs & Duration",
+      "title": "By Source: Imported IPs & Import Duration",
       "transformations": [
         {
           "id": "merge",
@@ -1070,21 +1199,67 @@
             "excludeByName": {
               "Time": true,
               "__name__": true,
-              "job": true,
-              "instance": true
-            },
-            "renameByName": {
-              "source": "Source",
-              "status": "Status",
-              "Value #A": "Status Value",
-              "Value #B": "IPs",
-              "Value #C": "Duration (s)"
+              "instance": true,
+              "job": true
             },
             "indexByName": {
-              "Source": 0,
-              "Status": 1,
+              "Duration (s)": 3,
               "IPs": 2,
-              "Duration (s)": 3
+              "Source": 0,
+              "Status": 1
+            },
+            "renameByName": {
+              "Value #A": "Status Value",
+              "Value #B": "IPs",
+              "Value #C": "Duration (s)",
+              "source": "Source",
+              "status": "Status"
+            }
+          }
+        },
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "Duration (s)": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "IPs": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "Source": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "Status": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "Status Value": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "Duration (s) (lastNotNull)": "Duration (s)",
+              "IPs (lastNotNull)": "IPs",
+              "Status (lastNotNull)": "Status",
+              "Status Value (lastNotNull)": "Status Value"
             }
           }
         },
@@ -1132,7 +1307,289 @@
             "cellOptions": {
               "type": "auto"
             },
+            "filterable": false,
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false,
+            "minWidth": 100
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 195
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error Count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "yellow",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 9,
+        "y": 25
+      },
+      "id": 17,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Error Count"
+          }
+        ]
+      },
+      "pluginVersion": "12.3.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "blocklist_import_source_status == 0",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (source) (blocklist_import_errors_total)",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "B"
+        }
+      ],
+      "title": "Sources With Parse Errors",
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value #A": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "status": true
+            },
+            "renameByName": {
+              "Value #B": "Error Count",
+              "source": "Source"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "red",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 9,
+        "x": 15,
+        "y": 25
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "pluginVersion": "12.3.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(1 - blocklist_import_source_status, 1)",
+          "instant": false,
+          "legendFormat": "{{source}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Sources In HTTP Error",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 103,
+      "panels": [],
+      "title": "🚨 Error Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            },
             "filterable": true,
+            "footer": {
+              "reducers": []
+            },
             "inspect": false,
             "minWidth": 100
           },
@@ -1161,42 +1618,42 @@
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background",
-                  "mode": "basic"
+                  "mode": "basic",
+                  "type": "color-background"
                 }
               },
               {
                 "id": "mappings",
                 "value": [
                   {
-                    "type": "value",
                     "options": {
                       "parse": {
-                        "text": "parse",
                         "color": "red",
-                        "index": 0
+                        "index": 0,
+                        "text": "parse"
                       }
-                    }
+                    },
+                    "type": "value"
                   },
                   {
-                    "type": "value",
                     "options": {
                       "fetch": {
-                        "text": "fetch",
                         "color": "orange",
-                        "index": 1
+                        "index": 1,
+                        "text": "fetch"
                       }
-                    }
+                    },
+                    "type": "value"
                   },
                   {
-                    "type": "value",
                     "options": {
                       "import": {
-                        "text": "import",
                         "color": "yellow",
-                        "index": 2
+                        "index": 2,
+                        "text": "import"
                       }
-                    }
+                    },
+                    "type": "value"
                   }
                 ]
               }
@@ -1210,7 +1667,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 300
+                "value": 225
               }
             ]
           },
@@ -1221,8 +1678,8 @@
             },
             "properties": [
               {
-                "id": "custom.wrap",
-                "value": true
+                "id": "custom.width",
+                "value": 505
               }
             ]
           },
@@ -1234,13 +1691,13 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 70
+                "value": 103
               },
               {
                 "id": "custom.cellOptions",
                 "value": {
-                  "type": "color-background",
-                  "mode": "basic"
+                  "mode": "basic",
+                  "type": "color-background"
                 }
               },
               {
@@ -1260,14 +1717,26 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error_type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 125
+              }
+            ]
           }
         ]
       },
       "gridPos": {
         "h": 10,
-        "w": 24,
+        "w": 16,
         "x": 0,
-        "y": 33
+        "y": 36
       },
       "id": 15,
       "options": {
@@ -1297,108 +1766,61 @@
           },
           "editorMode": "code",
           "expr": "blocklist_import_errors_total > 0",
+          "format": "table",
           "instant": true,
           "legendFormat": "__auto",
-          "refId": "A",
-          "format": "table"
-        }
-      ],
-      "title": "Errors — Type, Source & Message",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "job": true,
-              "instance": true
-            },
-            "renameByName": {
-              "error_type": "Type",
-              "source": "Source",
-              "message": "Error Message",
-              "Value": "Count"
-            },
-            "indexByName": {
-              "Type": 0,
-              "Source": 1,
-              "Error Message": 2,
-              "Count": 3
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
-                "color": "red",
-                "value": 100
-              }
-            ]
-          },
-          "unit": "short"
+          "refId": "A"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 31
-      },
-      "id": 9,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.3.3",
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(blocklist_import_errors_total)",
+          "editorMode": "code",
+          "expr": "round(increase(blocklist_import_errors_total[$__rate_interval])) > 0",
+          "format": "table",
           "instant": true,
-          "refId": "A"
+          "legendFormat": "__auto",
+          "refId": "B"
         }
       ],
-      "title": "Total Errors",
-      "type": "stat"
+      "title": "Parse Error Details",
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value #B": true,
+              "__name__": true,
+              "error_type": true,
+              "instance": true,
+              "job": true,
+              "message": false
+            },
+            "includeByName": {},
+            "indexByName": {
+              "Count": 3,
+              "Error Message": 2,
+              "New (5m)": 4,
+              "Source": 1,
+              "Type": 0
+            },
+            "renameByName": {
+              "Value #A": "Count",
+              "Value #B": "New (5m)",
+              "error_type": "Type",
+              "message": "Error Message",
+              "source": "Source"
+            }
+          }
+        }
+      ],
+      "type": "table"
     },
     {
       "datasource": {
@@ -1422,10 +1844,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 31
+        "h": 10,
+        "w": 8,
+        "x": 16,
+        "y": 36
       },
       "id": 10,
       "options": {
@@ -1435,7 +1857,7 @@
         ],
         "legend": {
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true,
           "values": [
             "value"
@@ -1451,9 +1873,9 @@
         },
         "sort": "desc",
         "tooltip": {
-          "hideZeros": false,
+          "hideZeros": true,
           "mode": "single",
-          "sort": "none"
+          "sort": "desc"
         }
       },
       "pluginVersion": "12.3.3",
@@ -1463,13 +1885,13 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "blocklist_import_errors_total",
+          "expr": "sum by (error_type) (blocklist_import_errors_total)",
           "instant": true,
           "legendFormat": "{{error_type}}",
           "refId": "A"
         }
       ],
-      "title": "Errors by Type",
+      "title": "Errors by Type (aggregated)",
       "type": "piechart"
     }
   ],
@@ -1506,5 +1928,5 @@
   "timezone": "",
   "title": "Crowdsec Blocklist Import",
   "uid": "crowdsec-blocklist-import",
-  "version": 1
+  "version": 2
 }
