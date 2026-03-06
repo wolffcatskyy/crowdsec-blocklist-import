@@ -119,7 +119,7 @@ Each blocklist source can be individually enabled or disabled. All blocklists de
 | Variable | Description | Default |
 |----------|-------------|---------|
 | ENABLE_IPSUM | IPsum aggregated threat intelligence (IPs appearing on 3+ blocklists) | `true` |
-| ENABLE_SPAMHAUS | Spamhaus DROP/EDROP lists | `true` |
+| ENABLE_SPAMHAUS | Spamhaus DROP list | `true` |
 | ENABLE_BLOCKLIST_DE | Blocklist.de abuse IP database | `true` |
 | ENABLE_FIREHOL | FireHOL threat intelligence lists | `true` |
 | ENABLE_ABUSE_CH | Abuse.ch malware IP lists | `true` |

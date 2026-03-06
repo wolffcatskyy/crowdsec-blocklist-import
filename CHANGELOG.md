@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ---
 
+## [Unreleased]
+
+### Removed
+
+- **Spamhaus EDROP Blocklist** — Removed deprecated EDROP source. Spamhaus has merged EDROP into the main DROP list, so the EDROP URL now returns no IPs. The DROP source already includes all former EDROP entries. Fixes [#56](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/56)
+
+---
+
 ## [3.5.0] — 2026-02-23
 
 ### Added

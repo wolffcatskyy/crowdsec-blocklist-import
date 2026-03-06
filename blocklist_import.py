@@ -370,14 +370,6 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         comment_char=";",
         extract_field=0,
     ),
-    # Spamhaus EDROP
-    BlocklistSource(
-        name="Spamhaus EDROP",
-        url="https://www.spamhaus.org/drop/edrop.txt",
-        enabled_key="enable_spamhaus",
-        comment_char=";",
-        extract_field=0,
-    ),
     # Blocklist.de
     BlocklistSource(
         name="Blocklist.de all",
