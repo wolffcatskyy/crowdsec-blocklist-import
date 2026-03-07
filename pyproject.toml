@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crowdsec-blocklist-import"
-version = "3.5.0"
+version = "3.6.0"
 description = "Memory-efficient importer for 28+ public threat feeds into CrowdSec via LAPI"
 readme = "README.md"
 license = {text = "MIT"}
