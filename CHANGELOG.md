@@ -8,9 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ## [Unreleased]
 
+---
+
+## [3.6.0] — 2026-03-07
+
+### Added
+
+- **CONSOLIDATE_ALERTS Option** — New `CONSOLIDATE_ALERTS=true` environment variable collects all IPs from all sources and sends a single CrowdSec alert per run instead of one per source batch. Helps free-tier users stay within the 500 alerts/month limit. Closes [#57](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/57)
+- **Sentinel Turris Blocklist** — Added `sentinel.turris.cz/greylist-data` as a new blocklist source. [#55](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/55) (by @gaelj)
+- **AbuseIPDB API Key File** — Added `ABUSEIPDB_API_KEY_FILE` config/env var for loading the API key from a file (Docker secrets compatible). [#50](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/50) (by @gaelj)
+- **Grafana Dashboard Improvements** — Enhanced Grafana dashboard with better visualizations. [#54](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/54) (by @gaelj)
+- **CI Workflow** — Added GitHub Actions CI with pytest, flake8, and syntax checks
+- **Test Suite** — Added comprehensive pytest test suite (`test_blocklist_import.py`)
+- **pip-installable Package** — Added `pyproject.toml` for `pip install crowdsec-blocklist-import` with proper entry point and optional extras
+- **Documentation** — Added CHANGELOG.md, migration guide (`docs/migration-from-bash.md`), updated CONTRIBUTING.md
+
+### Fixed
+
+- **429 Rate-Limit Freeze** — Fixed a freeze that occurred when a blocklist source returned HTTP 429 (Too Many Requests). [#53](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/53) (by @gaelj)
+- **FetchResult Attribute Errors** — Fixed crashes from incorrect attribute names (`error_message` vs `error_exc`) and wrong constructor kwargs in error paths. Fixes [#52](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/52)
+- **AbuseIPDB Test Failures** — Fixed failing error-path tests that expected pre-fix buggy behavior
+- **Flake8 Lint Violations** — Cleaned up unused imports, ambiguous variable names, whitespace, and indentation issues across the codebase
+
 ### Removed
 
 - **Spamhaus EDROP Blocklist** — Removed deprecated EDROP source. Spamhaus has merged EDROP into the main DROP list, so the EDROP URL now returns no IPs. The DROP source already includes all former EDROP entries. Fixes [#56](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/56)
+
+### Contributors
+
+- @gaelj — Sentinel Turris blocklist, AbuseIPDB key file, Grafana dashboard, 429 fix
+- Claude Opus 4.6
 
 ---
 
