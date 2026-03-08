@@ -100,7 +100,7 @@ AbuseIPDB is one of the largest crowd-sourced IP reputation databases with milli
 **New Environment Variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_ABUSEIPDB` | `false` | Enable AbuseIPDB source |
+| `ENABLE_ABUSE_IPDB` | `false` | Enable AbuseIPDB source |
 | `ABUSEIPDB_API_KEY` | — | API key for authentication |
 | `ABUSEIPDB_CONFIDENCE_MINIMUM` | `90` | Minimum abuse confidence score |
 | `ABUSEIPDB_LIMIT` | `500` | Max IPs to fetch per run |
