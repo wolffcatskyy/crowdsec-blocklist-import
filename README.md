@@ -187,6 +187,7 @@ DECISION_DURATION=24h
 | `WEBHOOK_TYPE` | `generic` | Webhook format: `generic`, `discord`, `slack` |
 | `CONSOLIDATE_ALERTS` | `false` | Send all IPs in a single alert per run (saves alert quota) |
 | `ABUSEIPDB_API_KEY` | *(none)* | AbuseIPDB API key for direct blacklist query |
+| `ABUSEIPDB_API_KEY_FILE` | *(none)* | AbuseIPDB API key file path for direct blacklist query |
 | `ABUSEIPDB_MIN_CONFIDENCE` | `90` | Minimum confidence score (1-100) |
 
 ### Selective Blocklists
@@ -346,6 +347,7 @@ Query the AbuseIPDB blacklist API directly for higher-quality results than the c
 
 ```bash
 ABUSEIPDB_API_KEY=your_api_key_here
+# or ABUSEIPDB_API_KEY_FILE=your_api_key_file_path_here
 ABUSEIPDB_MIN_CONFIDENCE=90   # Only IPs with 90%+ confidence
 ABUSEIPDB_LIMIT=10000         # Max IPs to fetch
 ```
