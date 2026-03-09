@@ -1902,9 +1902,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         for ip in new_ips:
             # Enforce MAX_DECISIONS cap
             if max_new > 0 and total_accepted >= max_new:
-                remaining_skipped = len(new_ips) - (total_accepted - (stats.new_ips - len(new_ips)))
                 logger.info(
-                    f"MAX_DECISIONS budget exhausted — skipping remaining IPs"
+                    "MAX_DECISIONS budget exhausted — skipping remaining IPs"
                 )
                 break
 
