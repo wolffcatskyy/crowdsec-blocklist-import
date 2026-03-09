@@ -19,7 +19,7 @@ docker run --rm \
   -e CROWDSEC_LAPI_KEY=your-bouncer-api-key \
   -e CROWDSEC_MACHINE_ID=blocklist-import \
   -e CROWDSEC_MACHINE_PASSWORD=your-machine-password \
-  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
 With additional options:
@@ -36,7 +36,7 @@ docker run --rm \
   -e LOG_LEVEL=INFO \
   -e ENABLE_TOR=false \
   -e ALLOWLIST_GITHUB=true \
-  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
 ---
@@ -61,7 +61,7 @@ services:
       - /var/log:/var/log:ro
 
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     depends_on:
@@ -125,7 +125,7 @@ your-actual-machine-password
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     depends_on:
@@ -309,7 +309,7 @@ spec:
         spec:
           containers:
           - name: blocklist-import
-            image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+            image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
             imagePullPolicy: IfNotPresent
             envFrom:
             - configMapRef:
@@ -374,7 +374,7 @@ cd /volume2/docker/blocklist-import
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     environment:
@@ -421,7 +421,7 @@ Use `ENABLE_<SOURCE>=false` to disable individual feeds.
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     environment:
@@ -487,7 +487,7 @@ Use the `ALLOWLIST` environment variable with comma-separated IPs or CIDR ranges
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     environment:
@@ -517,7 +517,7 @@ endpoints. No token is required -- it uses GitHub's public API.
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     environment:
@@ -564,7 +564,7 @@ services:
       - /var/log:/var/log:ro
 
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     depends_on:
@@ -686,7 +686,7 @@ docker run --rm \
   -e CROWDSEC_MACHINE_PASSWORD=your-machine-password \
   -e DRY_RUN=true \
   -e LOG_LEVEL=DEBUG \
-  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
 **Python dry run:**
@@ -742,7 +742,7 @@ services:
           memory: 2G
 
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     container_name: blocklist-import
     restart: "no"
     depends_on:

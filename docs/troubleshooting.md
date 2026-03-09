@@ -360,26 +360,26 @@ This guide covers common issues encountered when using crowdsec-blocklist-import
 1. **Use specific version tags instead of `:latest`:**
    ```yaml
    # Wrong
-   image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+   image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 
    # Right
-   image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:v3.4.0
+   image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:v3.4.0
    ```
 
 2. **Verify image version:**
    ```bash
-   docker run --rm ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:v3.4.0 --version
+   docker run --rm ghcr.io/wolffcatskyy/crowdsec-blocklist-import:v3.4.0 --version
    ```
    Should output the exact version matching the tag.
 
 3. **Rebuild with correct version:**
    ```bash
-   docker build -t ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:v3.4.0 .
+   docker build -t ghcr.io/wolffcatskyy/crowdsec-blocklist-import:v3.4.0 .
    ```
 
 4. **Check image metadata:**
    ```bash
-   docker inspect ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:v3.4.0 | grep -i version
+   docker inspect ghcr.io/wolffcatskyy/crowdsec-blocklist-import:v3.4.0 | grep -i version
    ```
 
 5. **Use release tags from GitHub:**

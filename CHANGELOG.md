@@ -302,7 +302,7 @@ This project follows [Semantic Versioning](https://semver.org):
 - **MINOR** — New features (backwards compatible)
 - **PATCH** — Bug fixes (backwards compatible)
 
-All releases are tagged on GitHub and published to [GitHub Container Registry](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import-python).
+All releases are tagged on GitHub and published to [GitHub Container Registry](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import).
 
 ---
 

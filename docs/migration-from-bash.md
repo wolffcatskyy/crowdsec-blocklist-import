@@ -172,7 +172,7 @@ services:
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     restart: unless-stopped
     networks:
       - crowdsec
@@ -480,7 +480,7 @@ python blocklist_import.py --interval 1800
   - [ ] Copy bouncer key for `CROWDSEC_LAPI_KEY`
 - [ ] **Update Docker Compose** (if applicable)
   - [ ] Remove Docker socket volume
-  - [ ] Update image to `ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest`
+  - [ ] Update image to `ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest`
   - [ ] Add `CROWDSEC_LAPI_URL`, `CROWDSEC_LAPI_KEY`, machine credentials
 - [ ] **Update environment variables**
   - [ ] Rename `LAPI_BATCH_SIZE` → `BATCH_SIZE`
@@ -606,7 +606,7 @@ A: Python is faster (500-1000 IPs/sec vs. 100-200 IPs/sec) and uses less memory 
 
 A: If running in Docker:
 ```bash
-docker pull ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+docker pull ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 docker compose up -d
 ```
 
