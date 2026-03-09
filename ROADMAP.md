@@ -2,7 +2,7 @@
 
 This document outlines the planned features and improvements for `crowdsec-blocklist-import`. We welcome community contributions to any of these items.
 
-**Current Version:** v3.4.0
+**Current Version:** v3.6.0
 **GitHub Stars:** 167
 
 ---
@@ -27,85 +27,67 @@ Adds CIDR-aware allowlist matching and provider allowlists (GitHub), plus Promet
 
 ## v3.5.0 — Notifications & Scheduling
 
-**Status:** Planned
-**Target:** Q2 2026
+**Status:** Released
+**Released:** 2026-02-23
 
 Two highly requested features that improve operational visibility and ease deployment.
 
 ### Built-in Scheduled Mode ([#5](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/5))
 
-Currently the container runs once and exits, requiring external cron or Kubernetes CronJobs. This release adds native scheduling support.
-
-**New Environment Variables:**
-| Variable | Description |
-|----------|-------------|
-| `INTERVAL` | Seconds between runs (e.g., `21600` for 6 hours) |
-| `SCHEDULE` | Cron expression (e.g., `0 */6 * * *`) |
-
-**Behavior:**
-- If neither is set, current run-once behavior is preserved
-- Container stays running in daemon mode
-- Graceful shutdown on SIGTERM/SIGINT
-- Failed runs log warnings but don't kill the daemon
+- [x] `INTERVAL` environment variable for daemon mode (seconds between runs)
+- [x] Graceful shutdown on SIGTERM/SIGINT
+- [x] `RUN_ON_START` flag to control first-run behavior
 
 ### Webhook Notifications ([#7](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/7))
 
-Get notified when imports complete, fail, or encounter issues.
+- [x] Discord, Slack, and generic JSON webhook support
+- [x] `WEBHOOK_URL` and `WEBHOOK_TYPE` environment variables
 
-**Supported Platforms:**
-- Discord (rich embeds with color-coded status)
-- Slack (Block Kit messages)
-- Generic webhooks (JSON POST)
+### AbuseIPDB Direct API ([#15](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/15))
 
-**New Environment Variables:**
-| Variable | Description |
-|----------|-------------|
-| `WEBHOOK_URL` | Webhook endpoint URL |
-| `WEBHOOK_TYPE` | `auto` (default), `discord`, `slack`, or `generic` |
+- [x] `ABUSEIPDB_API_KEY` for direct API queries
+- [x] Configurable confidence threshold and limit
 
-**Notification Payload:**
-- Import status (success/warning/error)
-- IPs imported count
-- Sources OK/failed/skipped
-- Version and timestamp
+### Per-Source Prometheus Metrics
+
+- [x] Error message sanitization for label cardinality control
+- [x] Per-source status, IP count, and duration tracking
 
 ---
 
-## v4.0.0 — IPv6 & AbuseIPDB
+## v3.6.0 — Consolidation, Sentinel & CI
+
+**Status:** Released
+**Released:** 2026-03-07
+
+### Changes
+
+- [x] `CONSOLIDATE_ALERTS` option — single alert per run to reduce CrowdSec console alert count (#57)
+- [x] Sentinel Turris blocklist source (#55, by @gaelj)
+- [x] `ABUSEIPDB_API_KEY_FILE` Docker secrets support (#50, by @gaelj)
+- [x] Enhanced Grafana dashboard (#54, by @gaelj)
+- [x] 429 rate-limit freeze fix (#53, by @gaelj)
+- [x] CI workflow with pytest, flake8, syntax checks
+- [x] `pyproject.toml` for pip installation
+- [x] Removed deprecated Spamhaus EDROP source (#56)
+- [x] `MAX_DECISIONS` cap to prevent ipset overflow on hardware firewalls
+
+---
+
+## v4.0.0 — IPv6 & Advanced Features
 
 **Status:** Planned
 **Target:** Q3 2026
 
-Major feature release adding IPv6 support and the most-requested new blocklist source.
-
 ### Full IPv6 Support ([#8](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/8))
 
-Currently only IPv4 addresses are extracted from blocklists. Many sources (Firehol, Blocklist.de, Spamhaus, Emerging Threats) include IPv6 that is silently discarded.
+Currently only IPv4 addresses are extracted from blocklists. Many sources include IPv6 that is silently discarded.
 
 **Changes:**
 - Extract both IPv4 and IPv6 from all blocklist sources
-- Filter IPv6 private/reserved ranges:
-  - `::1` (loopback)
-  - `fe80::/10` (link-local)
-  - `fc00::/7` (unique local)
-  - `::ffff:0:0/96` (IPv4-mapped)
-  - `2001:db8::/32` (documentation)
+- Filter IPv6 private/reserved ranges
 - Support CIDR notation for IPv6
 - Update statistics to show IPv4/IPv6 breakdown
-
-### AbuseIPDB Integration ([#15](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/15))
-
-AbuseIPDB is one of the largest crowd-sourced IP reputation databases with millions of reported IPs.
-
-**New Environment Variables:**
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENABLE_ABUSEIPDB` | `false` | Enable AbuseIPDB source |
-| `ABUSEIPDB_API_KEY` | — | API key for authentication |
-| `ABUSEIPDB_CONFIDENCE_MINIMUM` | `90` | Minimum abuse confidence score |
-| `ABUSEIPDB_LIMIT` | `500` | Max IPs to fetch per run |
-
-**Note:** AbuseIPDB free tier allows 5 API calls/day with up to 10,000 results.
 
 ---
 
@@ -144,6 +126,8 @@ We use **AI-Ready Issues** — every issue includes implementation details, acce
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| v3.6.0 | 2026-03-07 | CONSOLIDATE_ALERTS, Sentinel Turris, MAX_DECISIONS, CI/CD, pip-installable |
+| v3.5.0 | 2026-02-23 | Daemon mode, webhooks, AbuseIPDB API, per-source metrics |
 | v3.4.0 | 2026-02-20 | CIDR allowlists, ALLOWLIST_GITHUB provider, Prometheus push gateway |
 | v3.3.2 | 2026-02-17 | Allowlist parsing fix |
 | v3.3.1 | 2026-02-17 | CrowdSec credential file fix |
