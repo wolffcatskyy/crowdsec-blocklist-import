@@ -1,6 +1,6 @@
 # CrowdSec Blocklist Import - Configuration Reference
 
-**Version:** 3.5.0
+**Version:** 3.6.0
 **Configuration Method:** Environment Variables (no YAML config file)
 **Last Updated:** 2026-03-04
 
@@ -83,6 +83,7 @@ Controls import behavior, performance, and output formatting.
 | LOG_LEVEL | `INFO` | Logging verbosity level | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | DRY_RUN | `false` | Preview import without applying decisions | `true`, `false` |
 | CONSOLIDATE_ALERTS | `false` | Combine all IPs into a single CrowdSec alert per run | `true`, `false` |
+| MAX_DECISIONS | `0` | Cap total decisions (existing + new). 0 = unlimited | `50000`, `100000` |
 
 ### Notes on Processing Configuration
 
@@ -92,6 +93,7 @@ Controls import behavior, performance, and output formatting.
 - **LOG_LEVEL:** `DEBUG` produces verbose output useful for troubleshooting; `WARN` and `ERROR` minimize output
 - **DRY_RUN:** Validates configuration and shows what would be imported without modifying decisions
 - **CONSOLIDATE_ALERTS:** When enabled, all IPs from all sources are sent in a single alert instead of one alert per source batch. This dramatically reduces alert count on the CrowdSec console, which is important for users on the free tier (500 alerts/month limit). Trade-off: per-source scenario tracking is replaced with a generic "all sources" label.
+- **MAX_DECISIONS:** When set to a value greater than 0, the importer checks the count of existing CrowdSec decisions and only submits enough new IPs to reach the cap. For example, with `MAX_DECISIONS=50000` and 40,000 existing decisions, only 10,000 new IPs will be imported. Useful for preventing ipset overflow on devices with hardware limits (e.g., UniFi firewalls). Set to `0` (default) for unlimited.
 
 ---
 
@@ -139,6 +141,7 @@ Each blocklist source can be individually enabled or disabled. All blocklists de
 | ENABLE_CYBERCRIME_TRACKER | Abuse.ch Cybercrime Tracker C&C IPs | `true` |
 | ENABLE_MONTY_SECURITY_C2 | Monty Security C&C server tracker | `true` |
 | ENABLE_VXVAULT | VXvault malware sample repository IPs | `true` |
+| ENABLE_SENTINEL | Sentinel Turris greylist (community-sourced threat intelligence) | `true` |
 
 ### Notes on Blocklist Toggles
 
@@ -170,6 +173,7 @@ CROWDSEC_LAPI_KEY_FILE=/run/secrets/lapi_key
 The following variables support the `_FILE` pattern:
 - `CROWDSEC_LAPI_KEY_FILE` (instead of `CROWDSEC_LAPI_KEY`)
 - `CROWDSEC_MACHINE_PASSWORD_FILE` (instead of `CROWDSEC_MACHINE_PASSWORD`)
+- `ABUSEIPDB_API_KEY_FILE` (instead of `ABUSEIPDB_API_KEY`)
 
 ### Docker Compose Example
 

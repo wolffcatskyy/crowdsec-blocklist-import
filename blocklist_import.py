@@ -255,6 +255,9 @@ class Config:
     # Alert consolidation (reduce CrowdSec console alert count)
     consolidate_alerts: bool = False
 
+    # Maximum total decisions to submit (0 = unlimited)
+    max_decisions: int = 0
+
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
@@ -320,6 +323,7 @@ class Config:
             abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
+            max_decisions=int(os.getenv("MAX_DECISIONS", "0")),
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
@@ -1705,6 +1709,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
+    if config.max_decisions > 0:
+        logger.info(f"MAX_DECISIONS: {config.max_decisions} (will cap total decisions)")
 
     # Create HTTP session with retry logic
     session = create_http_session(config.max_retries)
@@ -1783,6 +1789,18 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, "custom_blocklists"))
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
+
+    # Compute max-decisions budget (0 = unlimited)
+    max_new: int = 0  # 0 means unlimited
+    if config.max_decisions > 0:
+        max_new = max(0, config.max_decisions - len(existing_ips))
+        logger.info(
+            f"MAX_DECISIONS={config.max_decisions}, existing={len(existing_ips)}, "
+            f"budget for new IPs: {max_new}"
+        )
+        if max_new == 0:
+            logger.warning("Existing decisions already meet or exceed MAX_DECISIONS — nothing to import")
+    total_accepted: int = 0  # track new IPs accepted so far
 
     # Process blocklists and batch import
     batch: list[str] = []
@@ -1878,12 +1896,21 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         else:
             stats.sources_failed += 1
 
-        # Add IPs to batch
+        # Add IPs to batch (respecting MAX_DECISIONS budget)
         stats.total_ips_fetched += len(new_ips)
-        stats.new_ips += len(new_ips)
 
         for ip in new_ips:
+            # Enforce MAX_DECISIONS cap
+            if max_new > 0 and total_accepted >= max_new:
+                logger.info(
+                    "MAX_DECISIONS budget exhausted — skipping remaining IPs"
+                )
+                break
+
             batch.append(ip)
+            stats.new_ips += 1
+            total_accepted += 1
+
             # Flush batch when full
             if len(batch) >= config.batch_size:
                 batch_cnt += 1
@@ -1897,18 +1924,27 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         source_failed += failed
         log_batch_stats(source_ok, source_failed, batch_cnt)
 
+        # Stop processing more sources if budget exhausted
+        if max_new > 0 and total_accepted >= max_new:
+            logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
+            break
+
     # Static scanner IPs (Censys)
+    budget_exhausted = max_new > 0 and total_accepted >= max_new
     log_separator(logger)
-    if config.enable_scanners:
+    if config.enable_scanners and not budget_exhausted:
         logger.debug("Adding static scanner IPs (Censys)")
         t0 = time.time()
         added = 0
         for cidr in STATIC_SCANNER_IPS:
+            if max_new > 0 and total_accepted >= max_new:
+                break
             if cidr not in seen_ips:
                 seen_ips.add(cidr)
                 batch.append(cidr)
                 stats.new_ips += 1
                 stats.total_ips_fetched += 1
+                total_accepted += 1
                 added += 1
         stats.sources_ok += 1
         ok, failed = flush_batch("Censys")
@@ -1917,11 +1953,12 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             metrics.record_source_success("Censys", added, time.time() - t0)
 
     # Fetch AbuseIPDB direct API (if API key is configured)
+    budget_exhausted = max_new > 0 and total_accepted >= max_new
     abuseipdb_api_key = config.abuseipdb_api_key
     if config.abuseipdb_api_key_file:
         abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
         logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
-    if abuseipdb_api_key and config.enable_abuseipdb:
+    if abuseipdb_api_key and config.enable_abuseipdb and not budget_exhausted:
         log_separator(logger)
         abuseipdb_ips, abuseipdb_result = fetch_abuseipdb_api(
             config=config,
@@ -1938,10 +1975,13 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             stats.sources_failed += 1
 
         stats.total_ips_fetched += len(abuseipdb_ips)
-        stats.new_ips += len(abuseipdb_ips)
 
         for ip in abuseipdb_ips:
+            if max_new > 0 and total_accepted >= max_new:
+                break
             batch.append(ip)
+            stats.new_ips += 1
+            total_accepted += 1
             if len(batch) >= config.batch_size:
                 ok, failed = flush_batch("AbuseIPDB API")
                 log_batch_stats(ok, failed, 1)
