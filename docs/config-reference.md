@@ -176,7 +176,7 @@ The following variables support the `_FILE` pattern:
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     environment:
       CROWDSEC_LAPI_URL: http://crowdsec:8080
       CROWDSEC_MACHINE_ID: blocklist-import

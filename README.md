@@ -5,7 +5,7 @@
 [![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
 [![Version](https://img.shields.io/badge/version-3.5.0-blue?style=flat-square)](https://github.com/wolffcatskyy/crowdsec-blocklist-import)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-[![GHCR](https://img.shields.io/badge/GHCR-crowdsec--blocklist--import--python-blue?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import-python)
+[![GHCR](https://img.shields.io/badge/GHCR-crowdsec--blocklist--import--python-blue?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import)
 
 ---
 
@@ -82,7 +82,7 @@ cscli bouncers add blocklist-import -o raw
 ```yaml
 services:
   blocklist-import:
-    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
     restart: unless-stopped
     networks:
       - crowdsec
@@ -130,7 +130,7 @@ docker run --rm --network crowdsec \
   -e CROWDSEC_LAPI_KEY=YOUR_KEY \
   -e CROWDSEC_MACHINE_ID=blocklist-import \
   -e CROWDSEC_MACHINE_PASSWORD=YourPassword \
-  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
 ### pip (Requires Python 3.11+)
@@ -378,7 +378,7 @@ Mount your `.env` file:
 docker run --rm \
   --network crowdsec \
   -v /path/to/.env:/app/.env:ro \
-  ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
 ### Scheduling with Systemd Timer
@@ -513,7 +513,7 @@ For more troubleshooting, see [FAQ](docs/faq.md).
 
 **Speed:** 500-1000 IPs/second depending on network
 
-**Docker Image:** `ghcr.io/wolffcatskyy/crowdsec-blocklist-import-python:latest` (~150MB)
+**Docker Image:** `ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest` (~150MB)
 
 **Authentication:** CrowdSec LAPI with machine credentials (JWT) + bouncer key for deduplication
 
