@@ -1554,9 +1554,8 @@ class CrowdSecLAPI:
         existing: Set[str] = set()
 
         try:
-            # Fetch all decisions at once using limit=0 (standard CrowdSec approach)
             response = self.session.get(
-                f"{self.base_url}/v1/decisions?limit=0",
+                f"{self.base_url}/v1/decisions",
                 headers=self.bouncer_headers,
                 timeout=60,
             )
