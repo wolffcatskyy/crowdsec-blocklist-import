@@ -355,11 +355,14 @@ class Config:
 class BlocklistSource:
     """Represents a blocklist source."""
     name: str
-    url: str
-    enabled_key: str
+    url: str = ""
+    preset_values: Optional[list[str]] = None  # Static IPs instead of URL fetch
+    enabled_key: str = ""
     comment_char: str = "#"
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
     field_separator: str = " "
+    headers: Optional[dict[str, str]] = None  # Custom request headers
+    params: Optional[dict[str, str]] = None  # Custom query parameters
 
 
 # Define all blocklist sources
@@ -536,15 +539,18 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_sentinel",
         extract_field=0,
         field_separator=","
-    )
-]
-
-# Static scanner IPs (Censys)
-STATIC_SCANNER_IPS: list[str] = [
-    "192.35.168.0/23",
-    "162.142.125.0/24",
-    "74.120.14.0/24",
-    "167.248.133.0/24",
+    ),
+    # Static scanner IPs (Censys) — preset values, no HTTP fetch needed
+    BlocklistSource(
+        name="Static scanner IPs (Censys)",
+        preset_values=[
+            "192.35.168.0/23",
+            "162.142.125.0/24",
+            "74.120.14.0/24",
+            "167.248.133.0/24",
+        ],
+        enabled_key="enable_scanners",
+    ),
 ]
 
 
@@ -1321,11 +1327,22 @@ def fetch_blocklist(
     try:
         logger.debug(f"Fetching {source.name} from {source.url}")
 
+        # Use custom headers if provided, otherwise default User-Agent
+        req_headers = source.headers if source.headers else {
+            "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+        }
+        # Build request kwargs
+        req_kwargs: dict = {
+            "timeout": timeout,
+            "stream": True,
+            "headers": req_headers,
+        }
+        if source.params:
+            req_kwargs["params"] = source.params
+
         response = session.get(
             source.url,
-            timeout=timeout,
-            stream=True,
-            headers={"User-Agent": f"crowdsec-blocklist-import/{__version__}"},
+            **req_kwargs,
         )
         response.raise_for_status()
 
@@ -1862,16 +1879,34 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         source_failed = 0
         batch_cnt = 1
         log_separator(logger)
-        # Fetch blocklist and get results
-        new_ips, result = fetch_blocklist(
-            session=session,
-            source=source,
-            timeout=config.fetch_timeout,
-            seen_ips=seen_ips,
-            allowlist=allowlist,
-            stats=stats,
-            logger=logger,
-        )
+
+        # Handle preset_values (static IPs) vs URL fetch
+        if source.preset_values:
+            logger.debug(f"Adding {source.name} ({len(source.preset_values)} preset IPs)")
+            t0 = time.time()
+            # Deduplicate preset values against seen_ips (same as fetch_blocklist path)
+            new_ips = []
+            for ip in source.preset_values:
+                if ip not in seen_ips:
+                    seen_ips.add(ip)
+                    new_ips.append(ip)
+            result = FetchResult(
+                source=source,
+                success=True,
+                ip_count=len(new_ips),
+                duration=time.time() - t0,
+            )
+        else:
+            # Fetch blocklist and get results
+            new_ips, result = fetch_blocklist(
+                session=session,
+                source=source,
+                timeout=config.fetch_timeout,
+                seen_ips=seen_ips,
+                allowlist=allowlist,
+                stats=stats,
+                logger=logger,
+            )
 
         # --- Update per-source metrics immediately after fetch ---
         if metrics:
@@ -1929,29 +1964,6 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
 
-    # Static scanner IPs (Censys)
-    budget_exhausted = max_new > 0 and total_accepted >= max_new
-    log_separator(logger)
-    if config.enable_scanners and not budget_exhausted:
-        logger.debug("Adding static scanner IPs (Censys)")
-        t0 = time.time()
-        added = 0
-        for cidr in STATIC_SCANNER_IPS:
-            if max_new > 0 and total_accepted >= max_new:
-                break
-            if cidr not in seen_ips:
-                seen_ips.add(cidr)
-                batch.append(cidr)
-                stats.new_ips += 1
-                stats.total_ips_fetched += 1
-                total_accepted += 1
-                added += 1
-        stats.sources_ok += 1
-        ok, failed = flush_batch("Censys")
-        log_batch_stats(ok, failed, 1)
-        if metrics:
-            metrics.record_source_success("Censys", added, time.time() - t0)
-
     # Fetch AbuseIPDB direct API (if API key is configured)
     budget_exhausted = max_new > 0 and total_accepted >= max_new
     abuseipdb_api_key = config.abuseipdb_api_key
@@ -1960,10 +1972,23 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
     if abuseipdb_api_key and config.enable_abuseipdb and not budget_exhausted:
         log_separator(logger)
-        abuseipdb_ips, abuseipdb_result = fetch_abuseipdb_api(
-            config=config,
-            abuseipdb_api_key=abuseipdb_api_key,
+        abuseipdb_source = BlocklistSource(
+            name="AbuseIPDB API",
+            url="https://api.abuseipdb.com/api/v2/blacklist",
+            enabled_key="enable_abuseipdb",
+            headers={
+                "Key": abuseipdb_api_key,
+                "Accept": "text/plain",
+            },
+            params={
+                "confidenceMinimum": config.abuseipdb_min_confidence,
+                "limit": config.abuseipdb_limit,
+            },
+        )
+        abuseipdb_ips, abuseipdb_result = fetch_blocklist(
             session=session,
+            source=abuseipdb_source,
+            timeout=config.fetch_timeout,
             seen_ips=seen_ips,
             allowlist=allowlist,
             stats=stats,
@@ -2171,83 +2196,6 @@ def _format_generic_webhook(stats: "ImportStats") -> dict:
         "imported_failed": stats.imported_failed,
         "duration_seconds": round(stats.duration_seconds, 1),
     }
-
-
-# =============================================================================
-# AbuseIPDB Direct API
-# =============================================================================
-
-def fetch_abuseipdb_api(
-    config: Config,
-    abuseipdb_api_key: str,
-    session: requests.Session,
-    seen_ips: Set[str],
-    allowlist: "Allowlist",
-    stats: "ImportStats",
-    logger: logging.Logger,
-) -> tuple[list[str], "FetchResult"]:
-    """
-    Fetch IPs directly from AbuseIPDB's blacklist API endpoint.
-
-    Requires an API key (free tier: 1000 reports/day, 5 checks/day).
-    Returns IPs with confidence >= abuseipdb_min_confidence.
-    """
-    source = BlocklistSource(
-        name="AbuseIPDB API",
-        url="https://api.abuseipdb.com/api/v2/blacklist",
-        enabled_key="enable_abuseipdb",
-    )
-
-    new_ips: list[str] = []
-
-    if not abuseipdb_api_key:
-        return new_ips, FetchResult(source=source, success=True, ip_count=0)
-
-    try:
-        logger.debug(f"Fetching AbuseIPDB blacklist (confidence >= {config.abuseipdb_min_confidence}%)")
-
-        response = session.get(
-            "https://api.abuseipdb.com/api/v2/blacklist",
-            headers={
-                "Key": abuseipdb_api_key,
-                "Accept": "text/plain",
-            },
-            params={
-                "confidenceMinimum": config.abuseipdb_min_confidence,
-                "limit": config.abuseipdb_limit,
-            },
-            timeout=config.fetch_timeout,
-        )
-        response.raise_for_status()
-
-        for line in response.text.splitlines():
-            ip_str = line.strip()
-            if not ip_str or ip_str.startswith("#"):
-                continue
-
-            try:
-                ip = ipaddress.ip_address(ip_str)
-                if is_private_or_reserved(ip):
-                    continue
-                if str(ip) in EXCLUDED_IPS:
-                    continue
-                normalized = str(ip)
-                if normalized not in seen_ips:
-                    if not allowlist.contains(normalized):
-                        seen_ips.add(normalized)
-                        new_ips.append(normalized)
-            except (ValueError, TypeError):
-                stats.parse_errors += 1
-
-        logger.debug(f"AbuseIPDB API: {len(new_ips)} unique new IPs")
-        return new_ips, FetchResult(source=source, success=True, ip_count=len(new_ips))
-
-    except requests.RequestException as e:
-        logger.warning(f"AbuseIPDB API: unavailable ({e})")
-        return new_ips, FetchResult(source=source, success=False, error_type="fetch", error_exc=e)
-    except Exception as e:
-        logger.error(f"AbuseIPDB API: unexpected error ({e})")
-        return new_ips, FetchResult(source=source, success=False, error_type="fetch", error_exc=e)
 
 
 # =============================================================================
