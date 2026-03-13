@@ -475,17 +475,15 @@ A pre-built Grafana dashboard is included at [`grafana-dashboard.json`](grafana-
 
 ---
 
-## Complete CrowdSec Suite
+## Part of the CrowdSec UniFi Ecosystem
 
-crowdsec-blocklist-import is part of a complete threat detection and enforcement stack:
+crowdsec-blocklist-import works great with any CrowdSec setup. It also pairs perfectly with the UniFi-specific projects below for a complete detect → decide → enforce stack on UniFi hardware:
 
-| Tool | Purpose |
-|------|---------|
-| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Import 28+ threat feeds into CrowdSec |
-| **[crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer)** | Enforce CrowdSec decisions on UniFi networks |
-| **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Parse UniFi firewall logs into CrowdSec |
-
-Deploy all three for defense-in-depth: **threat feeds -> CrowdSec detection -> UniFi enforcement**.
+| Project | Description |
+|---------|-------------|
+| [crowdsec-unifi-suite](https://github.com/wolffcatskyy/crowdsec-unifi-suite) | One-command installer for the full stack |
+| [crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer) | Enforce CrowdSec decisions on UniFi firewalls |
+| [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) | Parse UniFi firewall logs for CrowdSec |
 
 ---
 
