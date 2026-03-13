@@ -37,7 +37,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ### Contributors
 
 - @gaelj — Sentinel Turris blocklist, AbuseIPDB key file, Grafana dashboard, 429 fix
-- Claude Opus 4.6
 
 ---
 
@@ -66,8 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Contributors
 
-- Claude Opus 4.6
-- gaelj
+- @gaelj
 
 ---
 
@@ -90,10 +88,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ### Changed
 
 - **Security Policy** — Added security advisory warning about malicious clones. Users are urged to verify they're using the official source at [wolffcatskyy/crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)
-
-### Contributors
-
-- Claude Opus 4.6
 
 ---
 

@@ -16,8 +16,7 @@ Features:
 
 Authors:
 
-- Claude AI (wolffcatskyy/crowdsec-blocklist-import)
-- gaelj
+- @gaelj
 
 License: MIT
 """
@@ -2352,12 +2351,27 @@ cause the program to exit with an error. Unknown ENABLE_* variables
         help="Webhook format (overrides WEBHOOK_TYPE)",
     )
 
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Launch interactive setup wizard to configure .env file",
+    )
+
     return parser.parse_args()
 
 
 def main() -> int:
     """Main entry point."""
     args = parse_args()
+
+    # Handle --setup flag before any config loading (wizard manages its own env)
+    if args.setup:
+        try:
+            from setup_wizard import run_setup
+        except ImportError as exc:
+            print(f"Error: setup_wizard module not found: {exc}", file=sys.stderr)
+            return 1
+        return run_setup()
 
     # Load config from environment
     config = Config.from_env()
