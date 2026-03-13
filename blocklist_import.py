@@ -31,7 +31,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Generator, Optional, Set
+from typing import Generator, Optional, Set, Callable
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -55,32 +55,266 @@ except ImportError:
 __version__ = "3.6.0"
 
 # =============================================================================
+# Blocklist Sources
+# =============================================================================
+
+
+def get_normal_headers(config: "Config") -> dict[str, str]:
+    return {"User-Agent": f"crowdsec-blocklist-import/{__version__}"}
+
+
+def get_abuseipdb_api_headers(config: "Config") -> dict[str, str]:
+    return None if config.abuseipdb_api_key == "" else {
+        "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+        "Key": config.abuseipdb_api_key,
+        "Accept": "text/plain",
+    }
+
+
+def get_normal_params(config: "Config") -> dict[str, str]:
+    return {}
+
+
+def get_abuseipdb_api_params(config: "Config") -> dict[str, str]:
+    return {
+        "confidenceMinimum": config.abuseipdb_min_confidence,
+        "limit": config.abuseipdb_limit,
+    }
+
+
+def get_normal_can_import(config: "Config") -> bool:
+    return True
+
+
+def get_abuseipdb_api_can_import(config: "Config") -> bool:
+    return config.abuseipdb_api_key is not None and config.abuseipdb_api_key != ""
+
+
+@dataclass
+class BlocklistSource:
+    """Represents a blocklist source."""
+    name: str
+    url: Optional[str] = None
+    preset_values: Optional[list[str]] = None  # Can be passed, instead of URL
+    enabled_key: Optional[str] = ""
+    comment_char: Optional[str] = "#"
+    extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
+    field_separator: Optional[str] = " "
+    api_key_name: Optional[str] = None
+    get_headers: Callable = field(default=None)
+    get_params: Callable = field(default=None)
+    get_can_import: Callable = field(default=None)
+
+    def __post_init__(self):
+        if self.get_headers is None:
+            self.get_headers = get_normal_headers
+        if self.get_params is None:
+            self.get_params = get_normal_params
+        if self.get_can_import is None:
+            self.get_can_import = get_normal_can_import
+
+
+# Define all blocklist sources
+BLOCKLIST_SOURCES: list[BlocklistSource] = [
+    # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
+    BlocklistSource(
+        name="IPsum",
+        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
+        enabled_key="enable_ipsum",
+    ),
+    # Spamhaus DROP
+    BlocklistSource(
+        name="Spamhaus DROP",
+        url="https://www.spamhaus.org/drop/drop.txt",
+        enabled_key="enable_spamhaus",
+        comment_char=";",
+        extract_field=0,
+    ),
+    # Blocklist.de
+    BlocklistSource(
+        name="Blocklist.de all",
+        url="https://lists.blocklist.de/lists/all.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de SSH",
+        url="https://lists.blocklist.de/lists/ssh.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de Apache",
+        url="https://lists.blocklist.de/lists/apache.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de mail",
+        url="https://lists.blocklist.de/lists/mail.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    # Firehol
+    BlocklistSource(
+        name="Firehol level1",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+        enabled_key="enable_firehol",
+    ),
+    BlocklistSource(
+        name="Firehol level2",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
+        enabled_key="enable_firehol",
+    ),
+    # Abuse.ch
+    BlocklistSource(
+        name="Feodo Tracker",
+        url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+        enabled_key="enable_abuse_ch",
+    ),
+    BlocklistSource(
+        name="URLhaus",
+        url="https://urlhaus.abuse.ch/downloads/text_online/",
+        enabled_key="enable_abuse_ch",
+    ),
+    # Other sources
+    BlocklistSource(
+        name="Emerging Threats",
+        url="https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
+        enabled_key="enable_emerging_threats",
+    ),
+    BlocklistSource(
+        name="Binary Defense",
+        url="https://www.binarydefense.com/banlist.txt",
+        enabled_key="enable_binary_defense",
+    ),
+    BlocklistSource(
+        name="Bruteforce Blocker",
+        url="https://danger.rulez.sk/projects/bruteforceblocker/blist.php",
+        enabled_key="enable_bruteforce_blocker",
+    ),
+    BlocklistSource(
+        name="DShield",
+        url="https://www.dshield.org/block.txt",
+        enabled_key="enable_dshield",
+        extract_field=0,
+    ),
+    BlocklistSource(
+        name="CI Army",
+        url="https://cinsscore.com/list/ci-badguys.txt",
+        enabled_key="enable_ci_army",
+    ),
+    BlocklistSource(
+        name="Botvrij",
+        url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
+        enabled_key="enable_botvrij",
+    ),
+    BlocklistSource(
+        name="GreenSnow",
+        url="https://blocklist.greensnow.co/greensnow.txt",
+        enabled_key="enable_greensnow",
+    ),
+    BlocklistSource(
+        name="StopForumSpam",
+        url="https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt",
+        enabled_key="enable_stopforumspam",
+    ),
+    # Tor exit nodes
+    BlocklistSource(
+        name="Tor exit nodes",
+        url="https://check.torproject.org/torbulkexitlist",
+        enabled_key="enable_tor",
+    ),
+    BlocklistSource(
+        name="Tor (dan.me.uk)",
+        url="https://www.dan.me.uk/torlist/?exit",
+        enabled_key="enable_tor",
+    ),
+    # Scanners
+    BlocklistSource(
+        name="Shodan scanners",
+        url="https://gist.githubusercontent.com/jfqd/4ff7fa70950626a11832a4bc39451c1c/raw",
+        enabled_key="enable_scanners",
+    ),
+    # AbuseIPDB 99% confidence (via borestad mirror)
+    BlocklistSource(
+        name="AbuseIPDB",
+        url="https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4",
+        enabled_key="enable_abuse_ipdb",
+    ),
+    # Cybercrime Tracker C2 (FireHOL mirror)
+    BlocklistSource(
+        name="Cybercrime Tracker",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
+        enabled_key="enable_cybercrime_tracker",
+    ),
+    # Monty Security C2 Tracker
+    BlocklistSource(
+        name="Monty Security C2",
+        url="https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt",
+        enabled_key="enable_monty_security_c2",
+    ),
+    # DShield Top Attackers
+    BlocklistSource(
+        name="DShield Top Attackers",
+        url="https://feeds.dshield.org/top10-2.txt",
+        enabled_key="enable_dshield",
+        extract_field=0,
+    ),
+    # VXVault Malware (FireHOL mirror)
+    BlocklistSource(
+        name="VXVault",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset",
+        enabled_key="enable_vxvault",
+    ),
+    # --- Tier 2 Extended Coverage Blocklists ---
+    # IPsum Level 4+ (higher confidence than existing level 3)
+    BlocklistSource(
+        name="IPsum level4",
+        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt",
+        enabled_key="enable_ipsum",
+    ),
+    # Firehol Level 3 (extended 30-day coverage)
+    BlocklistSource(
+        name="Firehol level3",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
+        enabled_key="enable_firehol",
+    ),
+    # Maltrail mass scanners
+    BlocklistSource(
+        name="Maltrail scanners",
+        url="https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        enabled_key="enable_scanners",
+    ),
+    BlocklistSource(
+        name="Sentinel",
+        url="https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
+        enabled_key="enable_sentinel",
+        extract_field=0,
+        field_separator=","
+    ),
+    BlocklistSource(
+        name="AbuseIPDB API",
+        url="https://api.abuseipdb.com/api/v2/blacklist",
+        enabled_key="enable_abuse_ipdb",
+        get_headers=get_abuseipdb_api_headers,
+        get_params=get_abuseipdb_api_params,
+        get_can_import=get_abuseipdb_api_can_import
+    ),
+    BlocklistSource(
+        name="Static scanner IPs (Censys)",
+        preset_values=[
+            "192.35.168.0/23",
+            "162.142.125.0/24",
+            "74.120.14.0/24",
+            "167.248.133.0/24",
+        ],
+        enabled_key="enable_scanners",
+    ),
+]
+
+# =============================================================================
 # Environment Variable Validation
 # =============================================================================
 
 # All valid ENABLE_* environment variable names (canonical list)
-VALID_ENABLE_VARS: set[str] = {
-    "ENABLE_IPSUM",
-    "ENABLE_SPAMHAUS",
-    "ENABLE_BLOCKLIST_DE",
-    "ENABLE_FIREHOL",
-    "ENABLE_ABUSE_CH",
-    "ENABLE_EMERGING_THREATS",
-    "ENABLE_BINARY_DEFENSE",
-    "ENABLE_BRUTEFORCE_BLOCKER",
-    "ENABLE_DSHIELD",
-    "ENABLE_CI_ARMY",
-    "ENABLE_BOTVRIJ",
-    "ENABLE_GREENSNOW",
-    "ENABLE_STOPFORUMSPAM",
-    "ENABLE_TOR",
-    "ENABLE_SCANNERS",
-    "ENABLE_ABUSE_IPDB",
-    "ENABLE_CYBERCRIME_TRACKER",
-    "ENABLE_MONTY_SECURITY_C2",
-    "ENABLE_VXVAULT",
-    "ENABLE_SENTINEL",
-}
+VALID_ENABLE_VARS: set[str] = {s.enabled_key.upper() for s in BLOCKLIST_SOURCES if s.enabled_key}
 
 # Valid boolean string values (case-insensitive)
 VALID_BOOL_VALUES: set[str] = {"true", "false", "1", "0", "yes", "no", "on", "off"}
@@ -273,7 +507,7 @@ class Config:
     enable_stopforumspam: bool = True
     enable_tor: bool = True
     enable_scanners: bool = True
-    enable_abuseipdb: bool = True
+    enable_abuse_ipdb: bool = True
     enable_cybercrime_tracker: bool = True
     enable_monty_security_c2: bool = True
     enable_vxvault: bool = True
@@ -338,219 +572,12 @@ class Config:
             enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM"),
             enable_tor=get_bool("ENABLE_TOR"),
             enable_scanners=get_bool("ENABLE_SCANNERS"),
-            enable_abuseipdb=get_bool("ENABLE_ABUSE_IPDB"),
+            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB"),
             enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER"),
             enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2"),
             enable_vxvault=get_bool("ENABLE_VXVAULT"),
             enable_sentinel=get_bool("ENABLE_SENTINEL")
         )
-
-
-# =============================================================================
-# Blocklist Sources
-# =============================================================================
-
-@dataclass
-class BlocklistSource:
-    """Represents a blocklist source."""
-    name: str
-    url: str = ""
-    preset_values: Optional[list[str]] = None  # Static IPs instead of URL fetch
-    enabled_key: str = ""
-    comment_char: str = "#"
-    extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
-    field_separator: str = " "
-    headers: Optional[dict[str, str]] = None  # Custom request headers
-    params: Optional[dict[str, str]] = None  # Custom query parameters
-
-
-# Define all blocklist sources
-BLOCKLIST_SOURCES: list[BlocklistSource] = [
-    # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
-    BlocklistSource(
-        name="IPsum",
-        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
-        enabled_key="enable_ipsum",
-    ),
-    # Spamhaus DROP
-    BlocklistSource(
-        name="Spamhaus DROP",
-        url="https://www.spamhaus.org/drop/drop.txt",
-        enabled_key="enable_spamhaus",
-        comment_char=";",
-        extract_field=0,
-    ),
-    # Blocklist.de
-    BlocklistSource(
-        name="Blocklist.de all",
-        url="https://lists.blocklist.de/lists/all.txt",
-        enabled_key="enable_blocklist_de",
-    ),
-    BlocklistSource(
-        name="Blocklist.de SSH",
-        url="https://lists.blocklist.de/lists/ssh.txt",
-        enabled_key="enable_blocklist_de",
-    ),
-    BlocklistSource(
-        name="Blocklist.de Apache",
-        url="https://lists.blocklist.de/lists/apache.txt",
-        enabled_key="enable_blocklist_de",
-    ),
-    BlocklistSource(
-        name="Blocklist.de mail",
-        url="https://lists.blocklist.de/lists/mail.txt",
-        enabled_key="enable_blocklist_de",
-    ),
-    # Firehol
-    BlocklistSource(
-        name="Firehol level1",
-        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
-        enabled_key="enable_firehol",
-    ),
-    BlocklistSource(
-        name="Firehol level2",
-        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
-        enabled_key="enable_firehol",
-    ),
-    # Abuse.ch
-    BlocklistSource(
-        name="Feodo Tracker",
-        url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
-        enabled_key="enable_abuse_ch",
-    ),
-    BlocklistSource(
-        name="URLhaus",
-        url="https://urlhaus.abuse.ch/downloads/text_online/",
-        enabled_key="enable_abuse_ch",
-    ),
-    # Other sources
-    BlocklistSource(
-        name="Emerging Threats",
-        url="https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
-        enabled_key="enable_emerging_threats",
-    ),
-    BlocklistSource(
-        name="Binary Defense",
-        url="https://www.binarydefense.com/banlist.txt",
-        enabled_key="enable_binary_defense",
-    ),
-    BlocklistSource(
-        name="Bruteforce Blocker",
-        url="https://danger.rulez.sk/projects/bruteforceblocker/blist.php",
-        enabled_key="enable_bruteforce_blocker",
-    ),
-    BlocklistSource(
-        name="DShield",
-        url="https://www.dshield.org/block.txt",
-        enabled_key="enable_dshield",
-        extract_field=0,
-    ),
-    BlocklistSource(
-        name="CI Army",
-        url="https://cinsscore.com/list/ci-badguys.txt",
-        enabled_key="enable_ci_army",
-    ),
-    BlocklistSource(
-        name="Botvrij",
-        url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
-        enabled_key="enable_botvrij",
-    ),
-    BlocklistSource(
-        name="GreenSnow",
-        url="https://blocklist.greensnow.co/greensnow.txt",
-        enabled_key="enable_greensnow",
-    ),
-    BlocklistSource(
-        name="StopForumSpam",
-        url="https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt",
-        enabled_key="enable_stopforumspam",
-    ),
-    # Tor exit nodes
-    BlocklistSource(
-        name="Tor exit nodes",
-        url="https://check.torproject.org/torbulkexitlist",
-        enabled_key="enable_tor",
-    ),
-    BlocklistSource(
-        name="Tor (dan.me.uk)",
-        url="https://www.dan.me.uk/torlist/?exit",
-        enabled_key="enable_tor",
-    ),
-    # Scanners
-    BlocklistSource(
-        name="Shodan scanners",
-        url="https://gist.githubusercontent.com/jfqd/4ff7fa70950626a11832a4bc39451c1c/raw",
-        enabled_key="enable_scanners",
-    ),
-    # AbuseIPDB 99% confidence (via borestad mirror)
-    BlocklistSource(
-        name="AbuseIPDB",
-        url="https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4",
-        enabled_key="enable_abuseipdb",
-    ),
-    # Cybercrime Tracker C2 (FireHOL mirror)
-    BlocklistSource(
-        name="Cybercrime Tracker",
-        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
-        enabled_key="enable_cybercrime_tracker",
-    ),
-    # Monty Security C2 Tracker
-    BlocklistSource(
-        name="Monty Security C2",
-        url="https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt",
-        enabled_key="enable_monty_security_c2",
-    ),
-    # DShield Top Attackers
-    BlocklistSource(
-        name="DShield Top Attackers",
-        url="https://feeds.dshield.org/top10-2.txt",
-        enabled_key="enable_dshield",
-        extract_field=0,
-    ),
-    # VXVault Malware (FireHOL mirror)
-    BlocklistSource(
-        name="VXVault",
-        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset",
-        enabled_key="enable_vxvault",
-    ),
-    # --- Tier 2 Extended Coverage Blocklists ---
-    # IPsum Level 4+ (higher confidence than existing level 3)
-    BlocklistSource(
-        name="IPsum level4",
-        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt",
-        enabled_key="enable_ipsum",
-    ),
-    # Firehol Level 3 (extended 30-day coverage)
-    BlocklistSource(
-        name="Firehol level3",
-        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
-        enabled_key="enable_firehol",
-    ),
-    # Maltrail mass scanners
-    BlocklistSource(
-        name="Maltrail scanners",
-        url="https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
-        enabled_key="enable_scanners",
-    ),
-    BlocklistSource(
-        name="Sentinel",
-        url="https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
-        enabled_key="enable_sentinel",
-        extract_field=0,
-        field_separator=","
-    ),
-    # Static scanner IPs (Censys) — preset values, no HTTP fetch needed
-    BlocklistSource(
-        name="Static scanner IPs (Censys)",
-        preset_values=[
-            "192.35.168.0/23",
-            "162.142.125.0/24",
-            "74.120.14.0/24",
-            "167.248.133.0/24",
-        ],
-        enabled_key="enable_scanners",
-    ),
-]
 
 
 def list_blocklist_sources(logger: logging.Logger) -> None:
@@ -1307,7 +1334,7 @@ def log_separator(logger):
 def fetch_blocklist(
     session: requests.Session,
     source: BlocklistSource,
-    timeout: int,
+    config: Config,
     seen_ips: Set[str],
     allowlist: Allowlist,
     stats: "ImportStats",
@@ -1326,22 +1353,18 @@ def fetch_blocklist(
     try:
         logger.debug(f"Fetching {source.name} from {source.url}")
 
-        # Use custom headers if provided, otherwise default User-Agent
-        req_headers = source.headers if source.headers else {
-            "User-Agent": f"crowdsec-blocklist-import/{__version__}",
-        }
-        # Build request kwargs
-        req_kwargs: dict = {
-            "timeout": timeout,
-            "stream": True,
-            "headers": req_headers,
-        }
-        if source.params:
-            req_kwargs["params"] = source.params
+        headers = source.get_headers(config)
+        params = source.get_params(config)
+
+        if headers is None:
+            raise Exception(f"API key is required for {source.name}")
 
         response = session.get(
             source.url,
-            **req_kwargs,
+            timeout=config.fetch_timeout,
+            stream=True,
+            headers=headers,
+            params=params,
         )
         response.raise_for_status()
 
@@ -1756,6 +1779,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         logger=logger,
     )
 
+    if config.abuseipdb_api_key_file:
+        config.abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
+        logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
+
     # Check LAPI connectivity (unless dry run)
     if not config.dry_run:
         # Need either bouncer key (for reading) or machine creds (for writing)
@@ -1797,11 +1824,14 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     enabled_sources: list[BlocklistSource] = []
     for source in BLOCKLIST_SOURCES:
         if getattr(config, source.enabled_key, True):
-            enabled_sources.append(source)
+            if not source.get_can_import(config):
+                logger.debug(f"No API Key: ignoring source {source.name}")
+            else:
+                enabled_sources.append(source)
     if config.custom_block_lists:
         for i, url in enumerate(config.custom_block_lists):
             if url:
-                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, "custom_blocklists"))
+                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, enabled_key="custom_blocklists"))
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
@@ -1899,7 +1929,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             new_ips, result = fetch_blocklist(
                 session=session,
                 source=source,
-                timeout=config.fetch_timeout,
+                config=config,
                 seen_ips=seen_ips,
                 allowlist=allowlist,
                 stats=stats,
@@ -1907,7 +1937,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             )
 
         # --- Update per-source metrics immediately after fetch ---
-        if metrics:
+        if result and metrics:
             if result.success:
                 metrics.record_source_success(
                     source_name=source.name,
@@ -1924,7 +1954,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                     duration=result.duration,
                 )
 
-        if result.success:
+        if result and result.success:
             stats.sources_ok += 1
         else:
             stats.sources_failed += 1
@@ -1961,55 +1991,6 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if max_new > 0 and total_accepted >= max_new:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
-
-    # Fetch AbuseIPDB direct API (if API key is configured)
-    budget_exhausted = max_new > 0 and total_accepted >= max_new
-    abuseipdb_api_key = config.abuseipdb_api_key
-    if config.abuseipdb_api_key_file:
-        abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
-        logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
-    if abuseipdb_api_key and config.enable_abuseipdb and not budget_exhausted:
-        log_separator(logger)
-        abuseipdb_source = BlocklistSource(
-            name="AbuseIPDB API",
-            url="https://api.abuseipdb.com/api/v2/blacklist",
-            enabled_key="enable_abuseipdb",
-            headers={
-                "Key": abuseipdb_api_key,
-                "Accept": "text/plain",
-            },
-            params={
-                "confidenceMinimum": config.abuseipdb_min_confidence,
-                "limit": config.abuseipdb_limit,
-            },
-        )
-        abuseipdb_ips, abuseipdb_result = fetch_blocklist(
-            session=session,
-            source=abuseipdb_source,
-            timeout=config.fetch_timeout,
-            seen_ips=seen_ips,
-            allowlist=allowlist,
-            stats=stats,
-            logger=logger,
-        )
-        if abuseipdb_result.success:
-            stats.sources_ok += 1
-        else:
-            stats.sources_failed += 1
-
-        stats.total_ips_fetched += len(abuseipdb_ips)
-
-        for ip in abuseipdb_ips:
-            if max_new > 0 and total_accepted >= max_new:
-                break
-            batch.append(ip)
-            stats.new_ips += 1
-            total_accepted += 1
-            if len(batch) >= config.batch_size:
-                ok, failed = flush_batch("AbuseIPDB API")
-                log_batch_stats(ok, failed, 1)
-        ok, failed = flush_batch("AbuseIPDB API")
-        log_batch_stats(ok, failed, 1)
 
     # Flush consolidated alert (single alert for all sources)
     if config.consolidate_alerts and deferred_ips:

@@ -53,7 +53,7 @@ This is the difference between reactive security (waiting for alerts) and **acti
 - **Allowlist Support** -- Three-tier system: static IP lists, CIDR ranges, and provider-specific exceptions (GitHub IPs)
 - **Built-in Scheduler** -- Long-lived daemon mode with `INTERVAL=3600`. Graceful SIGTERM/SIGINT shutdown
 - **Webhook Notifications** -- Push import results to Discord, Slack, or any generic webhook endpoint
-- **AbuseIPDB Direct API** -- Query AbuseIPDB's blacklist API directly with configurable confidence thresholds
+- **AbuseIPDB Integration** -- Public mirror (no key needed) plus optional direct API for higher rate limits and fresher data
 - **Prometheus Metrics** -- Push to Pushgateway for monitoring imports, deduplication rates, and feed health
 - **Grafana Dashboard** -- Pre-built [dashboard](grafana-dashboard.json) for visualizing import metrics
 - **Docker Secrets** -- All credential variables support `_FILE` suffix for mounted secret files
@@ -129,6 +129,13 @@ docker run --rm --network crowdsec \
   ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
 ```
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap wolffcatskyy/crowdsec
+brew install crowdsec-blocklist-import
+```
+
 ### pip (Python 3.9+)
 
 ```bash
@@ -201,14 +208,20 @@ All credential variables support Docker Secrets via `_FILE` suffix (e.g., `CROWD
 | `WEBHOOK_URL` | *(none)* | Webhook URL for import notifications |
 | `WEBHOOK_TYPE` | `generic` | Webhook format: `generic`, `discord`, `slack` |
 
-### AbuseIPDB Direct API
+### AbuseIPDB
+
+`ENABLE_ABUSE_IPDB=true` fetches the **public mirror** maintained by [@borestad](https://github.com/borestad/blocklist-abuseipdb) — no API key required.
+
+For higher rate limits and fresher data, you can optionally configure a **direct API key**:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ABUSEIPDB_API_KEY` | *(none)* | API key for direct blacklist query |
-| `ABUSEIPDB_API_KEY_FILE` | *(none)* | API key file path (Docker Secrets) |
+| `ABUSEIPDB_API_KEY` | *(none)* | Optional: direct API key for higher rate limits |
+| `ABUSEIPDB_API_KEY_FILE` | *(none)* | Optional: API key file path (Docker Secrets) |
 | `ABUSEIPDB_MIN_CONFIDENCE` | `90` | Minimum confidence score (1-100) |
-| `ABUSEIPDB_LIMIT` | `10000` | Max IPs to fetch per query |
+| `ABUSEIPDB_LIMIT` | `10000` | Max IPs to fetch per direct API query |
+
+Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
 
 ### Selective Blocklists
 
@@ -253,7 +266,7 @@ crowdsec-blocklist-import pulls from 28+ threat intelligence sources:
 | **Bruteforce Blocker** | SSH/RDP brute force attacks | Attacks |
 | **DShield** | Top attacking IPs (Internet Storm Center) | Threats |
 | **CI Army** | Bad reputation hosts | Threats |
-| **AbuseIPDB** | Reported malicious IPs (community + direct API) | Threats |
+| **AbuseIPDB** | Reported malicious IPs (public mirror; direct API optional) | Threats |
 | **Cybercrime Tracker** | Cybercrime infrastructure | Malware |
 | **Monty Security C2** | Command and control servers | Malware |
 | **VX Vault** | Malware hosting IPs | Malware |
@@ -277,6 +290,7 @@ Options:
   -v, --version             Show version and exit
   -n, --dry-run             Preview without importing
   -d, --debug               Enable debug logging
+  --setup                   Launch interactive setup wizard
   --lapi-url URL            Override LAPI URL
   --lapi-key KEY            Override LAPI key
   --duration DURATION       Override decision duration
@@ -293,6 +307,9 @@ Options:
 ### Examples
 
 ```bash
+# Launch interactive setup wizard
+python blocklist_import.py --setup
+
 # Dry-run to see what would be imported
 python blocklist_import.py --dry-run
 
@@ -341,17 +358,18 @@ WEBHOOK_TYPE=generic
 
 ### AbuseIPDB Direct API
 
-Query the AbuseIPDB blacklist API directly for higher-quality results than the community mirror:
+By default, `ENABLE_ABUSE_IPDB=true` fetches the **public mirror** (no API key needed). To use the direct API for higher rate limits and fresher data:
 
 ```bash
 ABUSEIPDB_API_KEY=your_api_key_here
+# or ABUSEIPDB_API_KEY_FILE=your_api_key_file_path_here
 ABUSEIPDB_MIN_CONFIDENCE=90   # Only IPs with 90%+ confidence
 ABUSEIPDB_LIMIT=10000         # Max IPs to fetch
 ```
 
 Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
 
-> **Note:** The AbuseIPDB community mirror (via `ENABLE_ABUSE_IPDB`) is fetched separately. The direct API provides more IPs with configurable confidence thresholds.
+> **Note:** The public mirror (via `ENABLE_ABUSE_IPDB`) and the direct API are complementary. When an API key is configured, both sources are queried and deduplicated.
 
 ### Docker Secrets
 
