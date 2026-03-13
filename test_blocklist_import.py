@@ -118,7 +118,6 @@ def lapi(session_mock, logger):
         api_key="testkey",
         machine_id="testmachine",
         machine_password="testpass",
-        session=session_mock,
         logger=logger,
     )
 
@@ -887,7 +886,6 @@ class TestCrowdSecLAPIAddDecisions:
             api_key="key",
             machine_id="",
             machine_password="",
-            session=session_mock,
             logger=logger,
         )
         ok, failed = lapi_no_creds.add_decisions(
@@ -955,7 +953,6 @@ class TestCrowdSecLAPIMachineAuth:
             api_key="key",
             machine_id="",
             machine_password="",
-            session=session_mock,
             logger=logger,
         )
         token = lapi_no_creds._get_machine_token()
@@ -984,7 +981,6 @@ class TestCrowdSecLAPIMachineAuth:
             api_key="key",
             machine_id="",
             machine_password="",
-            session=session_mock,
             logger=logger,
         )
         assert lapi_no_creds.can_write() is False
