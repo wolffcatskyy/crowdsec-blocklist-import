@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ---
 
+## [3.7.0] — 2026-03-13
+
+### Added
+
+- **Interactive Setup Wizard** — New `--setup` flag launches an interactive first-time configuration wizard. Guides users through enabling/disabling blocklist sources and configuring API keys, writing a ready-to-use `.env` file. Ideal for new installs and Docker deployments. Closes [#61](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/61)
+- **Homebrew Tap Support** — Added Homebrew installation instructions for macOS/Linux users (`brew install wolffcatskyy/crowdsec/crowdsec-blocklist-import`). See README for details.
+- **AbuseIPDB Docs Clarification** — Improved `.env.example` to clearly distinguish the free public mirror (by @borestad, no API key required) from the optional direct API (`ABUSEIPDB_API_KEY`). Clarifies free tier limits (5 blacklist checks/day).
+
+### Changed
+
+- **BlocklistSource Standardization** — Refactored to use a unified `BlocklistSource` dataclass throughout, removing duplicated fetch/parse code paths. [#59](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/59) (by @gaelj)
+
+### Fixed
+
+- **Custom Blocklist Loop** — Fixed undefined `source` variable in custom blocklist iteration that could cause `NameError` in certain configurations. [#59](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pull/59) (by @gaelj)
+
+### Contributors
+
+- @gaelj — BlocklistSource standardization, custom blocklist fix
+
+---
+
 ## [3.6.0] — 2026-03-07
 
 ### Added

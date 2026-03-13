@@ -52,7 +52,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.6.0"
+__version__ = "3.7.0"
 
 # =============================================================================
 # Blocklist Sources
