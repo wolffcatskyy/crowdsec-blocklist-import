@@ -278,7 +278,7 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # Edit with your credentials
-nano .env
+$EDITOR .env
 ```
 
 ### 4. Create CrowdSec Credentials
