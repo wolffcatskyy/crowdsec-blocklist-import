@@ -113,13 +113,15 @@ def session_mock():
 
 @pytest.fixture()
 def lapi(session_mock, logger):
-    return CrowdSecLAPI(
+    obj = CrowdSecLAPI(
         base_url="http://localhost:8080",
         api_key="testkey",
         machine_id="testmachine",
         machine_password="testpass",
         logger=logger,
     )
+    obj.session = session_mock
+    return obj
 
 
 # ===========================================================================
