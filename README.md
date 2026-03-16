@@ -1,5 +1,8 @@
 # crowdsec-blocklist-import
 
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
+
 **Import 28+ threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
 
 [![GitHub Stars](https://img.shields.io/github/stars/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/stargazers)
