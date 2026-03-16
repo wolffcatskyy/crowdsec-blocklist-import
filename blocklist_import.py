@@ -1467,14 +1467,13 @@ class CrowdSecLAPI:
         api_key: str,
         machine_id: str,
         machine_password: str,
-        session: requests.Session,
         logger: logging.Logger,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.machine_id = machine_id
         self.machine_password = machine_password
-        self.session = session
+        self.session = create_http_session(10)
         self.logger = logger
         self.jwt_token: Optional[str] = None
         self.jwt_expires: Optional[float] = None
@@ -1775,7 +1774,6 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         api_key=lapi_key,
         machine_id=config.machine_id,
         machine_password=machine_password,
-        session=session,
         logger=logger,
     )
 
