@@ -100,6 +100,7 @@ class BlocklistSource:
     comment_char: Optional[str] = "#"
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
     field_separator: Optional[str] = " "
+    rate_limited: Optional[bool] = False
     api_key_name: Optional[str] = None
     get_headers: Callable = field(default=None)
     get_params: Callable = field(default=None)
@@ -225,6 +226,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         name="Tor (dan.me.uk)",
         url="https://www.dan.me.uk/torlist/?exit",
         enabled_key="enable_tor",
+        rate_limited=True,
     ),
     # Scanners
     BlocklistSource(
@@ -293,6 +295,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         name="AbuseIPDB API",
         url="https://api.abuseipdb.com/api/v2/blacklist",
         enabled_key="enable_abuse_ipdb",
+        rate_limited=True,
         get_headers=get_abuseipdb_api_headers,
         get_params=get_abuseipdb_api_params,
         get_can_import=get_abuseipdb_api_can_import
@@ -475,6 +478,8 @@ class Config:
     # Webhook notifications
     webhook_url: str = ""
     webhook_type: str = "generic"  # generic, discord, slack
+
+    mode: str = "all"  # all, frequent, limited
 
     # AbuseIPDB direct API
     abuseipdb_api_key: str = ""
@@ -1347,6 +1352,10 @@ def fetch_blocklist(
     FetchResult now carries duration, error_type, error_exc and
     per-token parse_errors so MetricsCollector can record full detail.
     """
+    if (source.rate_limited != (config.mode == "limited")) and (config.mode != "all"):
+        logger.debug(f"Mode is '{config.mode}': ignoring source {source.name}")
+        return [], None
+
     new_ips: list[str] = []
     t0 = time.time()
 
@@ -1743,6 +1752,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     logger.info(f"Decision duration: {config.decision_duration}")
     logger.info(f"LAPI URL: {config.lapi_url}")
     logger.info(f"Machine ID: {config.machine_id}")
+    logger.info(f"Mode: {config.mode}")
 
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
@@ -2336,6 +2346,12 @@ cause the program to exit with an error. Unknown ENABLE_* variables
         help="Launch interactive setup wizard to configure .env file",
     )
 
+    parser.add_argument(
+        "--mode",
+        choices=["all", "frequent", "limited"],
+        default="all",
+    )
+
     return parser.parse_args()
 
 
@@ -2378,6 +2394,8 @@ def main() -> int:
         config.webhook_url = args.webhook_url
     if args.webhook_type:
         config.webhook_type = args.webhook_type
+    if args.mode:
+        config.mode = args.mode
 
     # Setup logging
     logger = setup_logging(config)

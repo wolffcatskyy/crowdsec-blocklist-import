@@ -302,6 +302,7 @@ Options:
   --interval SECONDS        Daemon mode: repeat every N seconds
   --webhook-url URL         Webhook URL for notifications
   --webhook-type TYPE       Webhook format: generic, discord, slack
+  --mode MODE               Filter blocklist sources regarding rate-limiting: all, frequent, limited
 ```
 
 ### Examples
