@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*.*.*'
   pull_request:
     branches: [main]
 
@@ -15,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -36,3 +38,42 @@ jobs:
       - name: Lint with flake8
         run: |
           flake8 blocklist_import.py --max-line-length 120 --ignore E501,W503
+
+  release:
+    name: Create GitHub Release
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -f CHANGELOG.md ]; then
+            # Extract the section between this tag and the previous one
+            NOTES=$(awk "/^## \[?${TAG}\]?|^## ${TAG}/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+            if [ -z "$NOTES" ]; then
+              NOTES="Release ${TAG}"
+            fi
+          else
+            NOTES="Release ${TAG}"
+          fi
+          # Write to a file to safely handle multi-line content
+          echo "$NOTES" > release_notes.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --title "Release $TAG" \
+            --notes-file release_notes.txt
