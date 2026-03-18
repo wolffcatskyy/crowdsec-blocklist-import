@@ -57,9 +57,10 @@ jobs:
         id: changelog
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          VER="${TAG#v}"
           if [ -f CHANGELOG.md ]; then
             # Extract the section between this tag and the previous one
-            NOTES=$(awk "/^## \[?${TAG}\]?|^## ${TAG}/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+            NOTES=$(awk "/^## \[?${VER}\]?|^## ${VER}/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
             if [ -z "$NOTES" ]; then
               NOTES="Release ${TAG}"
             fi
