@@ -27,10 +27,12 @@ import argparse
 import ipaddress
 import logging
 import os
+import re
 import signal
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Generator, Optional, Set, Callable
 
 import requests
@@ -58,12 +60,36 @@ __version__ = "3.7.1"
 # Blocklist Sources
 # =============================================================================
 
+duration_pattern = re.compile(r'(\d+\.?\d*)\s*([dhms])')
 
-def get_normal_headers(config: "Config") -> dict[str, str]:
+
+def parse_duration(duration_str: str) -> timedelta:
+    total_seconds = 0
+    duration_str = duration_str \
+        .replace("days", "d") \
+        .replace("hrs", "h") \
+        .replace("hr", "h") \
+        .replace("mns", "m") \
+        .replace("mn", "m") \
+        .replace("secs", "s") \
+        .replace("sec", "s")
+    for value, unit in duration_pattern.findall(duration_str):
+        seconds = float(value)
+        if unit == 'd':
+            seconds *= 86400
+        if unit == 'h':
+            seconds *= 3600
+        if unit == 'm':
+            seconds *= 60
+        total_seconds += seconds
+    return timedelta(seconds=total_seconds)
+
+
+def get_normal_headers(config: Config) -> dict[str, str]:
     return {"User-Agent": f"crowdsec-blocklist-import/{__version__}"}
 
 
-def get_abuseipdb_api_headers(config: "Config") -> dict[str, str]:
+def get_abuseipdb_api_headers(config: Config) -> Optional[dict[str, str]]:
     return None if config.abuseipdb_api_key == "" else {
         "User-Agent": f"crowdsec-blocklist-import/{__version__}",
         "Key": config.abuseipdb_api_key,
@@ -71,22 +97,22 @@ def get_abuseipdb_api_headers(config: "Config") -> dict[str, str]:
     }
 
 
-def get_normal_params(config: "Config") -> dict[str, str]:
+def get_normal_params(config: Config) -> dict[str, str]:
     return {}
 
 
-def get_abuseipdb_api_params(config: "Config") -> dict[str, str]:
+def get_abuseipdb_api_params(config: Config) -> dict[str, str]:
     return {
         "confidenceMinimum": config.abuseipdb_min_confidence,
         "limit": config.abuseipdb_limit,
     }
 
 
-def get_normal_can_import(config: "Config") -> bool:
+def get_normal_can_import(config: Config) -> bool:
     return True
 
 
-def get_abuseipdb_api_can_import(config: "Config") -> bool:
+def get_abuseipdb_api_can_import(config: Config) -> bool:
     return config.abuseipdb_api_key is not None and config.abuseipdb_api_key != ""
 
 
@@ -349,7 +375,7 @@ def find_similar_vars(unknown_var: str, valid_vars: set[str]) -> list[str]:
 
     Uses simple substring matching and edit distance approximation.
     """
-    suggestions = []
+    suggestions: list[str] = []
     unknown_lower = unknown_var.lower()
 
     for valid in valid_vars:
@@ -412,7 +438,7 @@ def validate_enable_env_vars(logger: Optional[logging.Logger] = None) -> tuple[b
         else:
             # Validate the boolean value
             is_valid, error = validate_bool_value(var_name, value)
-            if not is_valid:
+            if not is_valid and error:
                 errors.append(error)
 
     # Log warnings (don't fail, just warn)
@@ -450,12 +476,16 @@ class Config:
     decision_scenario: str = "external/blocklist"
 
     # Processing settings
-    allow_list: list[str] = None
-    custom_block_lists: list[str] = None
+    allow_list: Optional[list[str]] = None
+    custom_block_lists: Optional[list[str]] = None
     batch_size: int = 1000
     fetch_timeout: int = 60
     max_retries: int = 3
     log_timestamps: bool = True
+
+    # IP refreshing time-spans: we refresh IPs that will soon expire before they do
+    refresh_period_frequent_mn: int = 60 + 2 * 15  # refresh period for non rate limited sources
+    refresh_period_limited_mn: int = 60 * 5 + 2 * 15  # refresh period for rate limited sources
 
     # Logging
     log_level: str = "INFO"
@@ -519,7 +549,7 @@ class Config:
     enable_sentinel: bool = True
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls) -> Config:
         """Load configuration from environment variables."""
         load_dotenv()
 
@@ -542,6 +572,8 @@ class Config:
             allow_list=[x.strip() for x in os.getenv("ALLOWLIST", "").split(",") if x.strip()],
             allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
             custom_block_lists=[x.strip() for x in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if x.strip()],
+            refresh_period_frequent_mn=int(os.getenv("REFRESH_PERIOD_FREQUENT_MN", "90")),
+            refresh_period_limited_mn=int(os.getenv("REFRESH_PERIOD_LIMITED_MN", "330")),
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
             fetch_timeout=int(os.getenv("FETCH_TIMEOUT", "60")),
             max_retries=int(os.getenv("MAX_RETRIES", "3")),
@@ -685,7 +717,8 @@ class MetricsCollector:
       - blocklist_import_source_status{source}
             Gauge: 1 = success, 0 = failed.
             Success/failure is encoded as the *value*, not a label (issue #4).
-      - blocklist_import_source_ips{source}               IPs fetched per source
+      - blocklist_import_source_ips{source}               new IPs fetched per source
+      - blocklist_import_source_refreshed_ips{source}     refreshed IPs fetched per source
       - blocklist_import_source_duration_seconds{source}  fetch time per source
       - blocklist_import_errors_total{error_type, source, message}
             error_type: "fetch" | "parse" | "import" | "encoding"  (issue #5)
@@ -695,6 +728,7 @@ class MetricsCollector:
     Aggregate gauges (for stat panels / success-rate):
       - blocklist_import_total_ips
       - blocklist_import_new_ips
+      - blocklist_import_refreshed_ips
       - blocklist_import_existing_decisions
       - blocklist_import_encoding_errors_total            (issue #5)
       - blocklist_import_sources_enabled / _successful / _failed
@@ -713,31 +747,38 @@ class MetricsCollector:
         self.logger = logger or logging.getLogger("blocklist-import")
         # Fresh registry per run — prevents stale label combinations from
         # lingering in the Pushgateway across runs (issue #6).
-        self.registry = CollectorRegistry()
 
-        if not PROMETHEUS_AVAILABLE:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             self.logger.warning(
                 "prometheus-client not installed. Metrics disabled. "
                 "Install with: pip install prometheus-client"
             )
             return
 
+        self.registry = CollectorRegistry()  # type: ignore
+
         # Gauge: Total IPs currently imported
-        self.total_ips = Gauge(
+        self.total_ips = Gauge(  # type: ignore
             "blocklist_import_total_ips",
             "Total number of IPs imported in the last run",
             registry=self.registry,
         )
 
+        self.refreshed_ips = Gauge(  # type: ignore
+            "blocklist_import_refreshed_ips",
+            "Number of refreshed IPs in the last run",
+            registry=self.registry,
+        )
+
         # Gauge: Unix timestamp of last successful run
-        self.last_run_timestamp = Gauge(
+        self.last_run_timestamp = Gauge(  # type: ignore
             "blocklist_import_last_run_timestamp",
             "Unix timestamp of the last import run",
             registry=self.registry,
         )
 
         # Gauge: Number of enabled blocklist sources
-        self.sources_enabled = Gauge(
+        self.sources_enabled = Gauge(  # type: ignore
             "blocklist_import_sources_enabled",
             "Number of enabled blocklist sources",
             registry=self.registry,
@@ -748,7 +789,7 @@ class MetricsCollector:
         # source      = BlocklistSource.name  (stable, human-readable)
         # message     = sanitized fixed-category string — never raw exception text.
         #               See sanitize_error_message() for the full category list.
-        self.errors_total = Gauge(
+        self.errors_total = Gauge(  # type: ignore
             "blocklist_import_errors_total",
             "Import errors labelled by type, source, and sanitized message category. "
             "message values are fixed categories (not raw exception strings) to bound cardinality.",
@@ -756,40 +797,47 @@ class MetricsCollector:
             registry=self.registry,
         )
 
-        self.duration_seconds = Histogram(
+        self.duration_seconds = Histogram(  # type: ignore
             "blocklist_import_duration_seconds",
             "Duration of full import run in seconds",
             buckets=[1, 5, 10, 30, 60, 120, 300, 600],
             registry=self.registry,
         )
 
-        self.sources_successful = Gauge(
+        self.sources_ok = Gauge(  # type: ignore
             "blocklist_import_sources_successful",
             "Number of sources successfully fetched in the last run",
             registry=self.registry,
         )
 
-        self.sources_failed = Gauge(
+        self.sources_failed = Gauge(  # type: ignore
             "blocklist_import_sources_failed",
             "Number of sources that failed to fetch in the last run",
             registry=self.registry,
         )
 
-        self.existing_decisions = Gauge(
+        self.existing_decisions = Gauge(  # type: ignore
             "blocklist_import_existing_decisions",
             "Number of existing CrowdSec decisions found",
             registry=self.registry,
         )
 
-        self.new_ips = Gauge(
+        self.new_ips = Gauge(  # type: ignore
             "blocklist_import_new_ips",
             "Number of new unique IPs added in the last run",
             registry=self.registry,
         )
 
+        self.source_refreshed_ips = Gauge(  # type: ignore
+            "blocklist_import_source_refreshed_ips",
+            "Number of unique refreshed IPs fetched from each source in the last run",
+            ["source"],
+            registry=self.registry,
+        )
+
         # Encoding errors were tracked in stats but previously invisible in
         # Prometheus. Now exposed as a top-level gauge
-        self.encoding_errors_total = Gauge(
+        self.encoding_errors_total = Gauge(  # type: ignore
             "blocklist_import_encoding_errors_total",
             "Total number of lines skipped due to encoding errors across all sources",
             registry=self.registry,
@@ -798,21 +846,21 @@ class MetricsCollector:
         # Per-source granular metrics.
         # source_status value: 1 = success, 0 = failed.
         # There is intentionally NO 'status' label — value encodes the state
-        self.source_status = Gauge(
+        self.source_status = Gauge(  # type: ignore
             "blocklist_import_source_status",
             "Per-source fetch status: 1=success, 0=failed",
             ["source"],
             registry=self.registry,
         )
 
-        self.source_ips = Gauge(
+        self.source_ips = Gauge(  # type: ignore
             "blocklist_import_source_ips",
             "Number of unique new IPs fetched from each source in the last run",
             ["source"],
             registry=self.registry,
         )
 
-        self.source_duration_seconds = Gauge(
+        self.source_duration_seconds = Gauge(  # type: ignore
             "blocklist_import_source_duration_seconds",
             "Time taken to fetch and parse each source (seconds)",
             ["source"],
@@ -823,12 +871,13 @@ class MetricsCollector:
     # Per-source helpers — called directly from fetch_blocklist / run_import
     # ------------------------------------------------------------------
 
-    def record_source_success(self, source_name: str, ip_count: int, duration: float) -> None:
+    def record_source_success(self, source_name: str, new_ip_count: int, refreshed_ip_count: int, duration: float) -> None:
         """Record a successful source fetch."""
-        if not PROMETHEUS_AVAILABLE:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             return
         self.source_status.labels(source=source_name).set(1)
-        self.source_ips.labels(source=source_name).set(ip_count)
+        self.source_ips.labels(source=source_name).set(new_ip_count)
+        self.source_refreshed_ips.labels(source=source_name).set(refreshed_ip_count)
         self.source_duration_seconds.labels(source=source_name).set(duration)
 
     def record_source_failure(self, source_name: str, error_type: str,
@@ -839,10 +888,11 @@ class MetricsCollector:
         exc is sanitized to a fixed category string before being stored as a
         label value — never use str(exc) directly (issue #3).
         """
-        if not PROMETHEUS_AVAILABLE:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             return
         self.source_status.labels(source=source_name).set(0)
         self.source_ips.labels(source=source_name).set(0)
+        self.source_refreshed_ips.labels(source=source_name).set(0)
         self.source_duration_seconds.labels(source=source_name).set(duration)
         short_msg = sanitize_error_message(exc) if isinstance(exc, Exception) else (str(exc)[:64] if exc else "unknown")
         self.errors_total.labels(
@@ -858,7 +908,7 @@ class MetricsCollector:
         Bad token strings are truncated to 64 chars. Unlike exception
         messages, parse tokens are naturally bounded per source.
         """
-        if not PROMETHEUS_AVAILABLE or not errors:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url or not errors:
             return
         for bad_token, count in errors.items():
             short_token = bad_token[:120]
@@ -875,7 +925,7 @@ class MetricsCollector:
         Previously these were tracked in ImportStats and logged but never
         surfaced in Prometheus. Now visible as blocklist_import_encoding_errors_total.
         """
-        if not PROMETHEUS_AVAILABLE or count == 0:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url or count == 0:
             return
         self.encoding_errors_total.set(count)
 
@@ -883,18 +933,22 @@ class MetricsCollector:
     # End-of-run aggregate update
     # ------------------------------------------------------------------
 
-    def update_aggregates(self, stats: "ImportStats", enabled_count: int) -> None:
+    def update_aggregates(self, stats: ImportStats, enabled_count: int) -> None:
         """Update scalar/aggregate gauges at end of run."""
-        if not PROMETHEUS_AVAILABLE:
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             return
-        self.total_ips.set(stats.imported_ok)
+        self.total_ips.set(stats.total_ips)
         self.new_ips.set(stats.new_ips)
+        self.refreshed_ips.set(stats.refreshed_ips)
         self.last_run_timestamp.set(time.time())
+
         self.sources_enabled.set(enabled_count)
-        self.sources_successful.set(stats.sources_ok)
+        self.sources_ok.set(stats.sources_ok)
         self.sources_failed.set(stats.sources_failed)
+
         self.existing_decisions.set(stats.existing_skipped)
         self.duration_seconds.observe(stats.duration_seconds)
+
         self.record_encoding_errors(stats.encoding_errors)
 
     def push(self) -> bool:
@@ -913,7 +967,7 @@ class MetricsCollector:
             # Non-fatal: if deletion fails we warn but still push, which will
             # overwrite any series present in both runs.
             try:
-                delete_from_gateway(
+                delete_from_gateway(  # type: ignore
                     self.pushgateway_url,
                     job="crowdsec-blocklist-import",
                 )
@@ -923,7 +977,7 @@ class MetricsCollector:
                     f"({self.pushgateway_url}): {del_exc}"
                 )
 
-            push_to_gateway(
+            push_to_gateway(  # type: ignore
                 self.pushgateway_url,
                 job="crowdsec-blocklist-import",
                 registry=self.registry,
@@ -1022,9 +1076,21 @@ class Allowlist:
         self._logger = logger or logging.getLogger("blocklist-import")
 
     @property
+    def exact_ips(self) -> Set[str]:
+        return self._exact_ips
+
+    @property
+    def networks_v4(self) -> Set[str]:
+        return self._networks_v4
+
+    @property
+    def networks_v6(self) -> Set[str]:
+        return self._networks_v6
+
+    @property
     def entry_count(self) -> int:
         """Total number of allowlist entries (IPs + networks)."""
-        return len(self._exact_ips) + len(self._networks_v4) + len(self._networks_v6)
+        return len(self.exact_ips) + len(self.networks_v4) + len(self.networks_v6)
 
     def add_entry(self, entry: str) -> None:
         """
@@ -1041,13 +1107,13 @@ class Allowlist:
             if "/" in entry:
                 network = ipaddress.ip_network(entry, strict=False)
                 if isinstance(network, ipaddress.IPv4Network):
-                    self._networks_v4.append(network)
+                    self.networks_v4.append(network)
                 else:
-                    self._networks_v6.append(network)
+                    self.networks_v6.append(network)
             else:
                 # Validate it's a real IP, then store as string for fast lookup
                 ipaddress.ip_address(entry)
-                self._exact_ips.add(entry)
+                self.exact_ips.add(entry)
         except (ValueError, TypeError) as e:
             self._logger.warning(f"Invalid allowlist entry '{entry}': {e}")
 
@@ -1071,7 +1137,7 @@ class Allowlist:
             True if the IP/CIDR should be allowlisted (skipped).
         """
         # Fast path: exact string match
-        if ip_str in self._exact_ips:
+        if ip_str in self.exact_ips:
             return True
 
         try:
@@ -1079,22 +1145,22 @@ class Allowlist:
                 # It's a CIDR from a blocklist - check overlap with allowlisted networks
                 network = ipaddress.ip_network(ip_str, strict=False)
                 if isinstance(network, ipaddress.IPv4Network):
-                    for allowed_net in self._networks_v4:
+                    for allowed_net in self.networks_v4:
                         if network.overlaps(allowed_net):
                             return True
                 else:
-                    for allowed_net in self._networks_v6:
+                    for allowed_net in self.networks_v6:
                         if network.overlaps(allowed_net):
                             return True
             else:
                 # It's a single IP - check containment in allowlisted networks
                 ip = ipaddress.ip_address(ip_str)
                 if isinstance(ip, ipaddress.IPv4Address):
-                    for network in self._networks_v4:
+                    for network in self.networks_v4:
                         if ip in network:
                             return True
                 else:
-                    for network in self._networks_v6:
+                    for network in self.networks_v6:
                         if ip in network:
                             return True
         except (ValueError, TypeError):
@@ -1128,7 +1194,7 @@ class Allowlist:
             response.raise_for_status()
             data = response.json()
 
-            seen = set()
+            seen: set[str] = set()
             for section in GITHUB_META_SECTIONS:
                 for cidr in data.get(section, []):
                     if cidr not in seen:
@@ -1148,7 +1214,7 @@ class Allowlist:
         return ranges_added
 
 
-def build_allowlist(config: "Config", session: Optional[requests.Session] = None,
+def build_allowlist(config: Config, session: Optional[requests.Session] = None,
                     logger: Optional[logging.Logger] = None) -> Allowlist:
     """
     Build an Allowlist from the configuration.
@@ -1179,9 +1245,9 @@ def build_allowlist(config: "Config", session: Optional[requests.Session] = None
 
     if allowlist.entry_count > 0 and logger:
         logger.info(
-            f"Allowlist total: {len(allowlist._exact_ips)} IPs, "
-            f"{len(allowlist._networks_v4)} IPv4 networks, "
-            f"{len(allowlist._networks_v6)} IPv6 networks"
+            f"Allowlist total: {len(allowlist.exact_ips)} IPs, "
+            f"{len(allowlist.networks_v4)} IPv4 networks, "
+            f"{len(allowlist.networks_v6)} IPv6 networks"
         )
 
     return allowlist
@@ -1222,6 +1288,14 @@ def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
         if value.startswith("C"):
             value = value[1:]
 
+        if value in [
+            "TIMEOUT",
+            "NXDOMAIN",
+            "None",
+            ">>UNKNOWN<<",
+        ]:
+            return (None, None)
+
         if "/" not in value:
             # Parse as single IP
             ip = ipaddress.ip_address(value)
@@ -1251,9 +1325,10 @@ def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
             return (str(network), None)
     except (ValueError, TypeError):
         return (None, value)
+    return (None, None)
 
 
-def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource) -> Generator[str, None, None]:
+def extract_ips_from_line(original_line: str, errors: dict[str, int], source: BlocklistSource) -> Generator[str, None, None]:
     """
     Extract IP addresses/networks from a line of text.
 
@@ -1264,7 +1339,7 @@ def extract_ips_from_line(line: str, errors: dict[str], source: BlocklistSource)
     - URLs: http://177.70.102.228:8070/TmpFTP/01/Consulta/2019-03-13/info.zip
     - Commented: # comment
     """
-    line = line.strip()
+    line = original_line.strip()
 
     # Skip empty lines and comments
     if not line or line.startswith(source.comment_char):
@@ -1325,14 +1400,17 @@ class FetchResult:
     """Result of fetching a blocklist."""
     source: BlocklistSource
     success: bool
-    ip_count: int = 0
+    pulled_unique_ip_count: int = 0
+    new_unique_ip_count: int = 0
+    refreshed_unique_ip_count: int = 0
     duration: float = 0.0
     error_type: str = ""                    # "fetch" | "parse" | "import" | "encoding"
-    error_exc: Optional[Exception] = None   # original exception (sanitized before use as label)
-    parse_errors: dict[str, int] = field(default_factory=dict)
+    # original exception (sanitized before use as label)
+    error_exception: Optional[Exception] = None
+    parse_errors: dict[str, int] = field(default_factory=dict[str, int])
 
 
-def log_separator(logger):
+def log_separator(logger: logging.Logger):
     logger.debug("-" * 10)
 
 
@@ -1340,11 +1418,13 @@ def fetch_blocklist(
     session: requests.Session,
     source: BlocklistSource,
     config: Config,
-    seen_ips: Set[str],
+    seen_ips: set[tuple[str, timedelta]],
+    non_expiring_known_ips: list[str],
+    expiring_known_ips: list[str],
     allowlist: Allowlist,
-    stats: "ImportStats",
+    stats: ImportStats,
     logger: logging.Logger,
-) -> tuple[list[str], FetchResult]:
+) -> tuple[list[str], list[str], FetchResult]:
     """
     Fetch and parse a single blocklist source.
 
@@ -1352,11 +1432,8 @@ def fetch_blocklist(
     FetchResult now carries duration, error_type, error_exc and
     per-token parse_errors so MetricsCollector can record full detail.
     """
-    if (source.rate_limited != (config.mode == "limited")) and (config.mode != "all"):
-        logger.debug(f"Mode is '{config.mode}': ignoring source {source.name}")
-        return [], None
-
     new_ips: list[str] = []
+    refresh_ips: list[str] = []
     t0 = time.time()
 
     try:
@@ -1379,10 +1456,17 @@ def fetch_blocklist(
 
         # Process line by line (streaming)
         # Use iter_lines without decode_unicode to handle encoding ourselves
-        total_ip_cnt = 0
-        ignored_ip_cnt = 0
+        total_raw_ip_cnt = 0
+        total_imported_unique_ip_cnt = 0
+        ignored_white_listed_ip_cnt = 0
+        refreshed_ip_cnt = 0
         parse_errors: dict[str, int] = {}
+        decision_duration = parse_duration(config.decision_duration)
+        new_ips: list[str] = []
+        non_expiring_seen_ips = set(non_expiring_known_ips.copy())
+        expiring_known_ips_set = set(expiring_known_ips)
 
+        logger.debug("Parsing...")
         for raw_line in response.iter_lines():
             if raw_line:
                 # Decode bytes to string, handling various encodings
@@ -1399,18 +1483,37 @@ def fetch_blocklist(
                     line = raw_line
 
                 for ip in extract_ips_from_line(line, parse_errors, source):
-                    total_ip_cnt += 1
-                    if ip not in seen_ips:
-                        if allowlist.contains(ip):
-                            ignored_ip_cnt += 1
+                    total_raw_ip_cnt += 1
+                    if ip not in non_expiring_seen_ips:
+                        non_expiring_seen_ips.add(ip)
+                        seen_ips.add((ip, decision_duration))
+                        if ip in expiring_known_ips_set:
+                            refreshed_ip_cnt += 1
+                            total_imported_unique_ip_cnt += 1
+                            refresh_ips.append(ip)
                         else:
-                            seen_ips.add(ip)
+                            total_imported_unique_ip_cnt += 1
                             new_ips.append(ip)
+
+        logger.debug("Applying allow-list to new IPs...")
+        allowed_new_ips = [ip for ip in new_ips if not allowlist.contains(ip)]
+
+        logger.debug("Applying allow-list to refreshed IPs...")
+        allowed_refresh_ips = [ip for ip in refresh_ips if not allowlist.contains(ip)]
+
+        ignored_white_listed_ip_cnt = len(refresh_ips) - len(allowed_refresh_ips) + len(new_ips) - len(allowed_new_ips)
+
+        refresh_ips = allowed_refresh_ips
+        new_ips = allowed_new_ips
+
+        new_ip_cnt = len(new_ips)
+
+        logger.debug("Finishing...")
 
         # Log parse errors (capped)
         max_cnt = 20
-        for error in parse_errors:
-            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{parse_errors[error]})')
+        for error, cnt in parse_errors.items():
+            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{cnt})')
             max_cnt -= 1
             if max_cnt == 0:
                 break
@@ -1418,41 +1521,43 @@ def fetch_blocklist(
         nb_errors = sum(parse_errors.values())
         stats.parse_errors += nb_errors
 
-        ignored_ips = f"{ignored_ip_cnt} ignored IPs (allow-list), " if ignored_ip_cnt > 0 else ""
         error_cnt = f", {nb_errors} parse errors" if nb_errors > 0 else ""
+        ignored_ips = f"{ignored_white_listed_ip_cnt} ignored IPs (allow-list), " if ignored_white_listed_ip_cnt > 0 else ""
+        duration = time.time() - t0
+
         logger.debug(
-            f"{source.name}: {total_ip_cnt} total IPs{error_cnt}, "
-            f"{ignored_ips}{len(new_ips)} unique new IPs"
+            f"{source.name}: "
+            f"{total_raw_ip_cnt} total IPs, "
+            f"{total_imported_unique_ip_cnt} processed IPs"
+            f"{error_cnt}, "
+            f"{ignored_ips}"
+            f"{new_ip_cnt} unique new IPs, "
+            f"{refreshed_ip_cnt} refreshed IPs, "
+            f"duration: {duration} sec"
         )
 
-        duration = time.time() - t0
-        return new_ips, FetchResult(
+        return new_ips, refresh_ips, FetchResult(
             source=source,
             success=True,
-            ip_count=len(new_ips),
+            pulled_unique_ip_count=total_imported_unique_ip_cnt,
+            new_unique_ip_count=new_ip_cnt,
+            refreshed_unique_ip_count=refreshed_ip_cnt,
             duration=duration,
             parse_errors=parse_errors,
         )
 
-    except requests.RequestException as e:
-        duration = time.time() - t0
-        logger.warning(f"{source.name}: unavailable ({e})")
-        return new_ips, FetchResult(
-            source=source,
-            success=False,
-            duration=duration,
-            error_type="fetch",
-            error_exc=e,
-        )
     except Exception as e:
+        if isinstance(e, requests.RequestException):
+            logger.warning(f"{source.name}: unavailable ({e})")
+        else:
+            logger.error(f"{source.name}: unexpected error ({e})")
         duration = time.time() - t0
-        logger.error(f"{source.name}: unexpected error ({e})")
-        return new_ips, FetchResult(
+        return new_ips, refresh_ips, FetchResult(
             source=source,
             success=False,
             duration=duration,
             error_type="fetch",
-            error_exc=e,
+            error_exception=e,
         )
 
 
@@ -1524,7 +1629,6 @@ class CrowdSecLAPI:
                 # Parse expiration or default to 1 hour
                 expire_str = data.get("expire", "")
                 if expire_str:
-                    from datetime import datetime
                     try:
                         expire_dt = datetime.fromisoformat(expire_str.replace("Z", "+00:00"))
                         self.jwt_expires = expire_dt.timestamp()
@@ -1534,17 +1638,17 @@ class CrowdSecLAPI:
                     self.jwt_expires = time.time() + 3600
                 self.logger.debug("Obtained machine JWT token")
                 return self.jwt_token
-            else:
-                self.logger.warning(
-                    f"Machine login failed: {response.status_code} {response.text[:200]}"
-                )
-                return None
+
+            self.logger.warning(
+                f"Machine login failed: {response.status_code} {response.text[:200]}"
+            )
+            return None
 
         except requests.RequestException as e:
             self.logger.error(f"Machine login request failed: {e}")
             return None
 
-    def _get_machine_headers(self) -> Optional[dict]:
+    def _get_machine_headers(self) -> Optional[dict[str, str]]:
         """Get headers for machine-authenticated requests."""
         token = self._get_machine_token()
         if not token:
@@ -1574,14 +1678,14 @@ class CrowdSecLAPI:
         """Check if we have credentials for write operations."""
         return bool(self.machine_id and self.machine_password)
 
-    def get_existing_ips(self) -> Set[str]:
+    def get_existing_ips(self) -> list[tuple[str, timedelta]]:
         """
         Get all existing decision IPs from CrowdSec.
 
         Returns a set of IP addresses/CIDRs that already have decisions.
         Uses bouncer API key for read access.
         """
-        existing: Set[str] = set()
+        existing: list[tuple[str, timedelta]] = []
 
         try:
             response = self.session.get(
@@ -1595,8 +1699,10 @@ class CrowdSecLAPI:
                 if decisions:
                     for decision in decisions:
                         value = decision.get("value", "")
+                        expiration_str = decision.get("duration", "0s")
+                        expiration = parse_duration(expiration_str)
                         if value:
-                            existing.add(value)
+                            existing.append((value, expiration))
             else:
                 self.logger.error(f"Error calling {self.base_url}/v1/decisions")
                 self.logger.error(f"Response: {response}")
@@ -1628,10 +1734,8 @@ class CrowdSecLAPI:
         if not ips:
             return 0, 0
 
-        from datetime import datetime, timezone
-
         # Build decisions for this alert
-        decisions = []
+        decisions: list[dict[str, str]] = []
         for ip in ips:
             # Determine if it's a network or single IP
             scope = "Ip"
@@ -1650,7 +1754,7 @@ class CrowdSecLAPI:
         # Build alert payload (CrowdSec creates decisions via alerts)
         # See: https://crowdsecurity.github.io/api_doc/index.html?urls.primaryName=LAPI
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        alert = {
+        alert: dict[str, object] = {
             "capacity": 0,
             "decisions": decisions,
             "events": [],
@@ -1689,11 +1793,11 @@ class CrowdSecLAPI:
 
             if response.status_code in (200, 201):
                 return len(ips), 0
-            else:
-                self.logger.warning(
-                    f"LAPI returned {response.status_code}: {response.text[:200]}"
-                )
-                return 0, len(ips)
+
+            self.logger.warning(
+                f"LAPI returned {response.status_code}: {response.text[:200]}"
+            )
+            return 0, len(ips)
 
         except requests.RequestException as e:
             self.logger.error(f"Failed to add decisions: {e}")
@@ -1709,10 +1813,14 @@ class ImportStats:
     """Statistics from the import run."""
     sources_ok: int = 0
     sources_failed: int = 0
-    total_ips_fetched: int = 0
+
+    total_ips: int = 0
     encoding_errors: int = 0
     parse_errors: int = 0
+
     new_ips: int = 0
+    refreshed_ips: int = 0
+
     imported_ok: int = 0
     imported_failed: int = 0
     existing_skipped: int = 0
@@ -1818,21 +1926,23 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         logger.info("Connected to CrowdSec LAPI")
 
     # Get existing decisions to avoid duplicates
-    existing_ips: Set[str] = set()
+    existing_ips_with_expiration_info: set[tuple[str, timedelta]] = []
     if not config.dry_run:
         logger.info("Checking existing CrowdSec decisions...")
-        existing_ips = lapi.get_existing_ips()
-        stats.existing_skipped = len(existing_ips)
-        logger.info(f"Found {len(existing_ips)} existing decisions")
+        existing_ips_with_expiration_info = lapi.get_existing_ips()
+        stats.existing_skipped = len(existing_ips_with_expiration_info)
+        logger.info(f"Found {len(existing_ips_with_expiration_info)} existing decisions")
 
     # Track seen IPs for deduplication (includes existing)
-    seen_ips: Set[str] = existing_ips.copy()
+    seen_ips: set[tuple[str, timedelta]] = set(existing_ips_with_expiration_info)
 
     # Collect enabled sources
     enabled_sources: list[BlocklistSource] = []
     for source in BLOCKLIST_SOURCES:
         if getattr(config, source.enabled_key, True):
-            if not source.get_can_import(config):
+            if (source.rate_limited != (config.mode == "limited")) and (config.mode != "all"):
+                logger.debug(f"Mode is '{config.mode}': ignoring source {source.name}")
+            elif not source.get_can_import(config):
                 logger.debug(f"No API Key: ignoring source {source.name}")
             else:
                 enabled_sources.append(source)
@@ -1846,9 +1956,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Compute max-decisions budget (0 = unlimited)
     max_new: int = 0  # 0 means unlimited
     if config.max_decisions > 0:
-        max_new = max(0, config.max_decisions - len(existing_ips))
+        max_new = max(0, config.max_decisions - len(existing_ips_with_expiration_info))
         logger.info(
-            f"MAX_DECISIONS={config.max_decisions}, existing={len(existing_ips)}, "
+            f"MAX_DECISIONS={config.max_decisions}, existing={len(existing_ips_with_expiration_info)}, "
             f"budget for new IPs: {max_new}"
         )
         if max_new == 0:
@@ -1911,6 +2021,10 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     # Process each blocklist source
     for source in enabled_sources:
+        refresh_period = timedelta(minutes=(config.refresh_period_limited_mn if source.rate_limited else config.refresh_period_frequent_mn))
+        expiring_known_ips_list = [ip for ip, expiration in seen_ips if expiration <= refresh_period]
+        non_expiring_known_ips = [ip for ip, expiration in seen_ips if expiration > refresh_period]
+
         source_ok = 0
         source_failed = 0
         batch_cnt = 1
@@ -1922,23 +2036,30 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             t0 = time.time()
             # Deduplicate preset values against seen_ips (same as fetch_blocklist path)
             new_ips = []
+            refreshed_ips = []
             for ip in source.preset_values:
-                if ip not in seen_ips:
-                    seen_ips.add(ip)
+                if ip not in [_ip for _ip, _ in seen_ips]:
+                    seen_ips.add((ip, timedelta(days=1)))
                     new_ips.append(ip)
+                else:
+                    refreshed_ips.append(ip)
             result = FetchResult(
                 source=source,
                 success=True,
-                ip_count=len(new_ips),
+                new_unique_ip_count=len(new_ips),
+                refreshed_unique_ip_count=len(refreshed_ips),
                 duration=time.time() - t0,
+                parse_errors={},
             )
         else:
             # Fetch blocklist and get results
-            new_ips, result = fetch_blocklist(
+            new_ips, refreshed_ips, result = fetch_blocklist(
                 session=session,
                 source=source,
                 config=config,
                 seen_ips=seen_ips,
+                expiring_known_ips=expiring_known_ips_list,
+                non_expiring_known_ips=non_expiring_known_ips,
                 allowlist=allowlist,
                 stats=stats,
                 logger=logger,
@@ -1949,7 +2070,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             if result.success:
                 metrics.record_source_success(
                     source_name=source.name,
-                    ip_count=result.ip_count,
+                    new_ip_count=result.new_unique_ip_count,
+                    refreshed_ip_count=result.refreshed_unique_ip_count,
                     duration=result.duration,
                 )
                 if result.parse_errors:
@@ -1958,7 +2080,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 metrics.record_source_failure(
                     source_name=source.name,
                     error_type=result.error_type or "fetch",
-                    exc=result.error_exc,
+                    exc=result.error_exception,
                     duration=result.duration,
                 )
 
@@ -1968,11 +2090,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             stats.sources_failed += 1
 
         # Add IPs to batch (respecting MAX_DECISIONS budget)
-        stats.total_ips_fetched += len(new_ips)
+        stats.total_ips += len(new_ips) + len(refreshed_ips)
 
         for ip in new_ips:
             # Enforce MAX_DECISIONS cap
-            if max_new > 0 and total_accepted >= max_new:
+            if 0 < max_new <= total_accepted:
                 logger.info(
                     "MAX_DECISIONS budget exhausted — skipping remaining IPs"
                 )
@@ -1980,6 +2102,18 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
             batch.append(ip)
             stats.new_ips += 1
+            total_accepted += 1
+
+        for ip in refreshed_ips:
+            # Enforce MAX_DECISIONS cap
+            if 0 < max_new <= total_accepted:
+                logger.info(
+                    "MAX_DECISIONS budget exhausted — skipping remaining IPs"
+                )
+                break
+
+            batch.append(ip)
+            stats.refreshed_ips += 1
             total_accepted += 1
 
             # Flush batch when full
@@ -1996,7 +2130,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         log_batch_stats(source_ok, source_failed, batch_cnt)
 
         # Stop processing more sources if budget exhausted
-        if max_new > 0 and total_accepted >= max_new:
+        if 0 < max_new <= total_accepted:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
 
@@ -2061,7 +2195,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         f"{stats.sources_failed} unavailable"
     )
 
-    if stats.new_ips == 0:
+    if stats.new_ips + stats.refreshed_ips == 0:
         logger.info(
             "No new IPs to import (all IPs already in CrowdSec)"
         )
@@ -2107,7 +2241,7 @@ def send_telemetry(
 # Webhook Notifications
 # =============================================================================
 
-def send_webhook(config: Config, stats: "ImportStats", logger: logging.Logger) -> None:
+def send_webhook(config: Config, stats: ImportStats, logger: logging.Logger) -> None:
     """Send import results to a webhook (Discord, Slack, or generic)."""
     if not config.webhook_url:
         return
@@ -2135,10 +2269,10 @@ def send_webhook(config: Config, stats: "ImportStats", logger: logging.Logger) -
         logger.warning(f"Webhook failed: {e}")
 
 
-def _format_discord_webhook(stats: "ImportStats") -> dict:
+def _format_discord_webhook(stats: ImportStats) -> dict[str, list[dict[str, str | int | list[dict[str, str | bool]] | dict[str, str]]]]:
     """Format stats as a Discord embed."""
     color = 0x2ECC71 if stats.imported_failed == 0 else 0xE74C3C
-    fields = [
+    fields: list[dict[str, str | bool]] = [
         {"name": "Sources", "value": f"{stats.sources_ok} ok / {stats.sources_failed} failed", "inline": True},
         {"name": "New IPs", "value": str(stats.new_ips), "inline": True},
         {"name": "Imported", "value": str(stats.imported_ok), "inline": True},
@@ -2157,7 +2291,7 @@ def _format_discord_webhook(stats: "ImportStats") -> dict:
     }
 
 
-def _format_slack_webhook(stats: "ImportStats") -> dict:
+def _format_slack_webhook(stats: ImportStats) -> dict[str, str]:
     """Format stats as a Slack message."""
     emoji = ":white_check_mark:" if stats.imported_failed == 0 else ":warning:"
     text = (
@@ -2171,7 +2305,7 @@ def _format_slack_webhook(stats: "ImportStats") -> dict:
     return {"text": text}
 
 
-def _format_generic_webhook(stats: "ImportStats") -> dict:
+def _format_generic_webhook(stats: ImportStats) -> dict[str, str | int | float]:
     """Format stats as a generic JSON payload."""
     return {
         "event": "blocklist_import_complete",
@@ -2197,9 +2331,9 @@ def setup_logging(config: Config) -> logging.Logger:
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logger.level)
 
-    format = "[%(asctime)s] [%(levelname)s] %(message)s" if config.log_timestamps else "[%(levelname)s] %(message)s"
+    _format = "[%(asctime)s] [%(levelname)s] %(message)s" if config.log_timestamps else "[%(levelname)s] %(message)s"
     formatter = logging.Formatter(
-        format,
+        _format,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     handler.setFormatter(formatter)
@@ -2428,7 +2562,7 @@ def main() -> int:
         list_blocklist_sources(logger)
         return 0
 
-    # Initialize and start Prometheus metrics server
+    # Initialize Prometheus metrics
     if config.metrics_enabled and PROMETHEUS_AVAILABLE:
         init_metrics(config.pushgateway_url, logger)
 
@@ -2473,7 +2607,7 @@ def _run_daemon(config: Config, logger: logging.Logger) -> int:
     """Run in daemon mode: repeat imports on a fixed interval."""
     shutdown = False
 
-    def _signal_handler(signum, frame):
+    def _signal_handler(signum: object, _: object):
         nonlocal shutdown
         logger.info(f"Received signal {signum}, shutting down after current run...")
         shutdown = True

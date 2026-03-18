@@ -19,6 +19,7 @@ Coverage:
 
 from __future__ import annotations
 
+from datetime import timedelta
 import ipaddress
 import io
 import logging
@@ -62,6 +63,7 @@ from blocklist_import import (
     get_abuseipdb_api_headers,
     get_abuseipdb_api_params,
     get_abuseipdb_api_can_import,
+    parse_duration,
 )
 
 
@@ -765,30 +767,30 @@ class TestCrowdSecLAPIGetExistingIPs:
                 {"value": "5.6.7.8"},
             ]),
         )
-        existing = lapi.get_existing_ips()
+        existing = [i for i, _ in lapi.get_existing_ips()]
         assert "1.2.3.4" in existing
         assert "5.6.7.8" in existing
 
     def test_empty_decisions_list(self, lapi, session_mock):
         session_mock.get.return_value = Mock(status_code=200, json=Mock(return_value=[]))
         existing = lapi.get_existing_ips()
-        assert existing == set()
+        assert existing == []
 
     def test_null_response_body(self, lapi, session_mock):
         session_mock.get.return_value = Mock(status_code=200, json=Mock(return_value=None))
         existing = lapi.get_existing_ips()
-        assert existing == set()
+        assert existing == []
 
     def test_non_200_returns_empty(self, lapi, session_mock):
         session_mock.get.return_value = Mock(status_code=401)
         existing = lapi.get_existing_ips()
-        assert existing == set()
+        assert existing == []
 
     def test_network_error_returns_empty(self, lapi, session_mock):
         import requests
         session_mock.get.side_effect = requests.RequestException("connection refused")
         existing = lapi.get_existing_ips()
-        assert existing == set()
+        assert existing == []
 
     def test_json_parse_error_returns_empty(self, lapi, session_mock):
         session_mock.get.return_value = Mock(
@@ -796,7 +798,7 @@ class TestCrowdSecLAPIGetExistingIPs:
             json=Mock(side_effect=ValueError("bad json")),
         )
         existing = lapi.get_existing_ips()
-        assert existing == set()
+        assert existing == []
 
 
 class TestCrowdSecLAPIAddDecisions:
@@ -1012,11 +1014,13 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" in new_ips
         assert "5.6.7.8" in new_ips
         assert result.success is True
-        assert result.ip_count == 2
+        assert result.new_unique_ip_count == 2
 
     def test_deduplication_against_seen(self, dummy_source, logger, session_mock):
         resp = self._make_response(["1.2.3.4", "5.6.7.8"])
@@ -1025,7 +1029,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = ["1.2.3.4"]
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" not in new_ips
         assert "5.6.7.8" in new_ips
 
@@ -1037,7 +1043,9 @@ class TestFetchBlocklist:
         allowlist.add_entry("1.2.3.4")
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" not in new_ips
         assert "5.6.7.8" in new_ips
 
@@ -1048,7 +1056,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" in new_ips
         assert len(new_ips) == 1
 
@@ -1059,7 +1069,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert new_ips == []
         assert result.success is False
         assert result.error_type == "fetch"
@@ -1073,7 +1085,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert result.success is False
 
     def test_parse_errors_tracked(self, dummy_source, logger, session_mock):
@@ -1083,7 +1097,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "bad-token" in result.parse_errors
         assert result.success is True
 
@@ -1104,7 +1120,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         # At minimum 1.2.3.4 should succeed
         assert "1.2.3.4" in new_ips
         assert result.success is True
@@ -1116,7 +1134,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        _, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        _, _, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert result.duration >= 0.0
 
     def test_private_ips_not_included(self, dummy_source, logger, session_mock):
@@ -1126,7 +1146,9 @@ class TestFetchBlocklist:
         allowlist = Allowlist()
         stats = ImportStats()
         config = Config()
-        new_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_source, config, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "192.168.1.1" not in new_ips
         assert "10.0.0.1" not in new_ips
         assert "1.2.3.4" in new_ips
@@ -1278,7 +1300,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
 
         assert "1.2.3.4" in new_ips
         assert "5.6.7.8" in new_ips
@@ -1294,7 +1318,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" in new_ips
         assert len(new_ips) == 1
 
@@ -1308,7 +1334,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "192.168.1.1" not in new_ips
         assert "1.2.3.4" in new_ips
 
@@ -1323,7 +1351,9 @@ class TestFetchAbuseIPDB:
         allowlist = Allowlist()
         allowlist.add_entry("1.2.3.4")
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" not in new_ips
         assert "5.6.7.8" in new_ips
 
@@ -1337,7 +1367,9 @@ class TestFetchAbuseIPDB:
         seen = {"1.2.3.4"}
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = ["1.2.3.4"]
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.2.3.4" not in new_ips
         assert "5.6.7.8" in new_ips
 
@@ -1346,7 +1378,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert new_ips == []
         assert result.success is False
         session_mock.get.assert_not_called()
@@ -1359,11 +1393,13 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert new_ips == []
         assert result.success is False
         assert result.error_type == "fetch"
-        assert result.error_exc is not None
+        assert result.error_exception is not None
 
     def test_http_error_returns_failure(self, dummy_abuse_ipdb_source, logger, session_mock):
         """On HTTP error, fetch_abuseipdb_api returns an empty list and failed result."""
@@ -1376,11 +1412,13 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert new_ips == []
         assert result.success is False
         assert result.error_type == "fetch"
-        assert result.error_exc is not None
+        assert result.error_exception is not None
 
     def test_confidence_params_passed(self, dummy_abuse_ipdb_source, logger, session_mock):
         """Confidence and limit are forwarded as query params."""
@@ -1393,7 +1431,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
 
         call_kwargs = session_mock.get.call_args
         params = call_kwargs[1].get("params", {})
@@ -1411,7 +1451,9 @@ class TestFetchAbuseIPDB:
         seen = set()
         allowlist = Allowlist()
         stats = ImportStats()
-        new_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, allowlist, stats, logger)
+        non_expiring_known_ips: list[str] = []
+        expiring_known_ips: list[str] = []
+        new_ips, refreshed_ips, result = fetch_blocklist(session_mock, dummy_abuse_ipdb_source, cfg, seen, non_expiring_known_ips, expiring_known_ips, allowlist, stats, logger)
         assert "1.1.1.1" not in new_ips
         assert "8.8.8.8" not in new_ips
         assert "1.2.3.4" in new_ips
@@ -1494,7 +1536,7 @@ class TestMetricsCollector:
         return MetricsCollector(pushgateway_url="localhost:9091", logger=logger)
 
     def test_record_source_success(self, metrics):
-        metrics.record_source_success("TestSource", ip_count=100, duration=1.5)
+        metrics.record_source_success("TestSource", new_ip_count=100, refreshed_ip_count=20, duration=1.5)
         # If no exception raised, metric was recorded successfully
 
     def test_record_source_failure(self, metrics):
@@ -1538,14 +1580,14 @@ class TestMetricsCollectorNoop:
         from blocklist_import import MetricsCollector
         m = MetricsCollector(logger=logger)
         # These should not raise even though prometheus is unavailable
-        m.record_source_success("src", 10, 1.0)
+        m.record_source_success("src", 10, 1.0, 10)
         m.record_encoding_errors(5)
         result = m.push()
         assert result is False
 
 
 # ===========================================================================
-# Bonus: sanitize_error_message()
+# sanitize_error_message()
 # ===========================================================================
 
 
@@ -1591,7 +1633,7 @@ class TestSanitizeErrorMessage:
 
 
 # ===========================================================================
-# Bonus: read_secret_file()
+# read_secret_file()
 # ===========================================================================
 
 
@@ -1627,3 +1669,92 @@ class TestConfigToAllowlistIntegration:
         assert al.contains("1.2.3.4") is True
         assert al.contains("203.0.113.1") is True
         assert al.contains("5.6.7.8") is False
+
+
+# ===========================================================================
+# parse_duration()
+# ===========================================================================
+
+
+class TestParsing:
+    def test_seconds_short(self):
+        assert parse_duration("30s") == timedelta(seconds=30)
+
+    def test_minutes_short(self):
+        assert parse_duration("5m") == timedelta(minutes=5)
+
+    def test_hours_short(self):
+        assert parse_duration("2h") == timedelta(hours=2)
+
+    def test_days_short(self):
+        assert parse_duration("1d") == timedelta(days=1)
+
+
+    # --- Single unit: long-form aliases ---
+
+    @pytest.mark.parametrize("s", ["10sec", "10secs"])
+    def test_seconds_long(self, s):
+        assert parse_duration(s) == timedelta(seconds=10)
+
+    @pytest.mark.parametrize("s", ["3mn", "3mns"])
+    def test_minutes_long(self, s):
+        assert parse_duration(s) == timedelta(minutes=3)
+
+    @pytest.mark.parametrize("s", ["4hr", "4hrs"])
+    def test_hours_long(self, s):
+        assert parse_duration(s) == timedelta(hours=4)
+
+    @pytest.mark.parametrize("s", ["2days"])
+    def test_days_long(self, s):
+        assert parse_duration(s) == timedelta(days=2)
+
+
+    # --- Combinations ---
+
+    def test_hours_and_minutes(self):
+        assert parse_duration("1h30m") == timedelta(hours=1, minutes=30)
+
+    def test_days_hours_minutes_seconds(self):
+        assert parse_duration("1d2h3m4s") == timedelta(days=1, hours=2, minutes=3, seconds=4)
+
+    def test_minutes_and_seconds(self):
+        assert parse_duration("45m30s") == timedelta(minutes=45, seconds=30)
+
+    def test_long_form_combination(self):
+        assert parse_duration("2hrs30mns") == timedelta(hours=2, minutes=30)
+
+
+    # --- Whitespace tolerance ---
+
+    def test_spaces_between_value_and_unit(self):
+        assert parse_duration("5 m") == timedelta(minutes=5)
+
+    def test_spaces_between_components(self):
+        assert parse_duration("1h 30m 15s") == timedelta(hours=1, minutes=30, seconds=15)
+
+
+    # --- Floating point values ---
+
+    def test_float_hours(self):
+        assert parse_duration("1.5h") == timedelta(hours=1, minutes=30)
+
+    def test_float_minutes(self):
+        assert parse_duration("0.5m") == timedelta(seconds=30)
+
+    def test_float_days(self):
+        assert parse_duration("0.5d") == timedelta(hours=12)
+
+
+    # --- Edge cases ---
+
+    def test_zero_duration(self):
+        assert parse_duration("0s") == timedelta(0)
+
+    def test_empty_string_returns_zero(self):
+        assert parse_duration("") == timedelta(0)
+
+    def test_no_recognized_units_returns_zero(self):
+        assert parse_duration("foobar") == timedelta(0)
+
+    def test_large_value(self):
+        assert parse_duration("999d") == timedelta(days=999)

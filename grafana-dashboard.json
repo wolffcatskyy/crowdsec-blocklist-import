@@ -19,7 +19,6 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": null,
   "links": [],
   "panels": [
     {
@@ -61,7 +60,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4.8,
+        "w": 4,
         "x": 0,
         "y": 1
       },
@@ -83,7 +82,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -124,8 +123,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4.8,
-        "x": 4.8,
+        "w": 4,
+        "x": 4,
         "y": 1
       },
       "id": 2,
@@ -146,7 +145,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -159,6 +158,69 @@
         }
       ],
       "title": "New IPs (last run)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 301,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "blocklist_import_refreshed_ips",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Refreshed IPs (last run)",
       "type": "stat"
     },
     {
@@ -197,8 +259,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4.8,
-        "x": 9.6,
+        "w": 4,
+        "x": 12,
         "y": 1
       },
       "id": 3,
@@ -219,7 +281,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -268,8 +330,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4.8,
-        "x": 14.4,
+        "w": 4,
+        "x": 16,
         "y": 1
       },
       "id": 4,
@@ -290,7 +352,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -339,8 +401,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 4.8,
-        "x": 19.2,
+        "w": 4,
+        "x": 20,
         "y": 1
       },
       "id": 9,
@@ -361,7 +423,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -470,7 +532,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -493,6 +555,17 @@
           "legendFormat": "New IPs",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "blocklist_import_refreshed_ips",
+          "instant": false,
+          "legendFormat": "Refreshed IPs",
+          "range": true,
+          "refId": "C"
         }
       ],
       "title": "IPs Imported Per Run",
@@ -517,7 +590,7 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "bars",
-            "fillOpacity": 100,
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -609,7 +682,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -718,7 +791,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -826,7 +899,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -932,7 +1005,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -979,7 +1052,9 @@
             },
             "filterable": true,
             "footer": {
-              "reducers": []
+              "reducers": [
+                "countAll"
+              ]
             },
             "inspect": false,
             "minWidth": 100
@@ -1008,57 +1083,13 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 280
+                "value": 220
               },
               {
                 "id": "custom.cellOptions",
                 "value": {
                   "type": "auto"
                 }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Status"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 90
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "mode": "basic",
-                  "type": "color-background"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "options": {
-                      "failed": {
-                        "color": "red",
-                        "index": 0,
-                        "text": "FAILED"
-                      }
-                    },
-                    "type": "value"
-                  },
-                  {
-                    "options": {
-                      "success": {
-                        "color": "green",
-                        "index": 1,
-                        "text": "OK"
-                      }
-                    },
-                    "type": "value"
-                  }
-                ]
               }
             ]
           },
@@ -1086,7 +1117,7 @@
             "properties": [
               {
                 "id": "custom.width",
-                "value": 120
+                "value": 110
               },
               {
                 "id": "unit",
@@ -1120,6 +1151,30 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "New IPs"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Refreshed IPs"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
           }
         ]
       },
@@ -1132,23 +1187,15 @@
       "id": 14,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "countRows": true,
-          "fields": "",
-          "reducer": [
-            "count"
-          ],
-          "show": true
-        },
         "showHeader": true,
         "sortBy": [
           {
             "desc": true,
-            "displayName": "IPs"
+            "displayName": "New IPs"
           }
         ]
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -1180,11 +1227,23 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "blocklist_import_source_duration_seconds",
+          "expr": "blocklist_import_source_refreshed_ips",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "blocklist_import_source_duration_seconds",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "D"
         }
       ],
       "title": "By Source: Imported IPs & Import Duration",
@@ -1210,8 +1269,9 @@
             },
             "renameByName": {
               "Value #A": "Status Value",
-              "Value #B": "IPs",
-              "Value #C": "Duration (s)",
+              "Value #B": "New IPs",
+              "Value #C": "Refreshed IPs",
+              "Value #D": "Duration (s)",
               "source": "Source",
               "status": "Status"
             }
@@ -1228,6 +1288,18 @@
                 "operation": "aggregate"
               },
               "IPs": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "New IPs": {
+                "aggregations": [
+                  "lastNotNull"
+                ],
+                "operation": "aggregate"
+              },
+              "Refreshed IPs": {
                 "aggregations": [
                   "lastNotNull"
                 ],
@@ -1255,9 +1327,13 @@
         {
           "id": "organize",
           "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {},
             "renameByName": {
               "Duration (s) (lastNotNull)": "Duration (s)",
-              "IPs (lastNotNull)": "IPs",
+              "New IPs (lastNotNull)": "New IPs",
+              "Refreshed IPs (lastNotNull)": "Refreshed IPs",
               "Status (lastNotNull)": "Status",
               "Status Value (lastNotNull)": "Status Value"
             }
@@ -1390,9 +1466,6 @@
       "id": 17,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "show": false
-        },
         "showHeader": true,
         "sortBy": [
           {
@@ -1401,7 +1474,7 @@
           }
         ]
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -1540,7 +1613,7 @@
           "sort": "asc"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -1588,7 +1661,9 @@
             },
             "filterable": true,
             "footer": {
-              "reducers": []
+              "reducers": [
+                "countAll"
+              ]
             },
             "inspect": false,
             "minWidth": 100
@@ -1741,14 +1816,6 @@
       "id": 15,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "countRows": true,
-          "fields": "",
-          "reducer": [
-            "count"
-          ],
-          "show": true
-        },
         "showHeader": true,
         "sortBy": [
           {
@@ -1757,7 +1824,7 @@
           }
         ]
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -1878,7 +1945,7 @@
           "sort": "desc"
         }
       },
-      "pluginVersion": "12.3.3",
+      "pluginVersion": "12.4.1",
       "targets": [
         {
           "datasource": {
@@ -1921,12 +1988,13 @@
     ]
   },
   "time": {
-    "from": "now-2d",
+    "from": "now-24h",
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "",
+  "timezone": "browser",
   "title": "Crowdsec Blocklist Import",
   "uid": "crowdsec-blocklist-import",
-  "version": 2
+  "version": 2,
+  "weekStart": ""
 }
