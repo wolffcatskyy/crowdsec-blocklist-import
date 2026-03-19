@@ -563,6 +563,12 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ---
 
+## Contributors
+
+- [@gaelj](https://github.com/gaelj) — Major contributions including IP refresh before expiration, Grafana dashboard improvements, CI/CD pipeline, bug fixes, and [NixOS packaging](https://github.com/NixOS/nixpkgs/pull/486054)
+
+---
+
 ## License
 
 MIT License -- See [LICENSE](LICENSE) for details.
@@ -572,8 +578,6 @@ MIT License -- See [LICENSE](LICENSE) for details.
 ## Credits
 
 **Maintained by** [wolffcatskyy](https://github.com/wolffcatskyy). Developed with assistance from Claude AI.
-
-**Contributors:** [gaelj](https://github.com/gaelj)
 
 **Special Thanks:**
 - [CrowdSec](https://www.crowdsec.net/) for the threat detection platform
