@@ -5,6 +5,13 @@ All notable changes to crowdsec-blocklist-import are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
+## [3.7.1] — 2026-04-20
+
+### Fixed
+
+- **Decisions API Pagination** — Add missing `limit` parameter to CrowdSec API fetch, allowing import of >250 decisions. Fixes pagination issue where only first page was processed.
+- **Monty Security C2 Source** — Disable by default; upstream removed `data/all.txt` file. Users can re-enable via `ENABLE_MONTY_SECURITY_C2=true` if alternative URL is confirmed.
+- **NO_METRICS Environment Variable** — Add support for `NO_METRICS=true` as an alias for disabling metrics, in addition to existing `METRICS_ENABLED=false`.
 
 ## [Unreleased]
 
