@@ -23,12 +23,41 @@ These variables must be set before the application can run. The application will
 | CROWDSEC_MACHINE_ID | Machine identifier for authentication | `blocklist-import` |
 | CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE | Machine password or path to Docker secret file | `mypassword` or `/run/secrets/machine_password` |
 
+For HTTPS LAPI deployments, `CROWDSEC_LAPI_CA_CERT_PATH` can be used to verify the HTTPS certificate served by LAPI. For LAPI client certificate authentication, `CROWDSEC_LAPI_CERT_PATH` and `CROWDSEC_LAPI_KEY_PATH` can be used instead of the bouncer key and machine credentials. These settings are independent.
+
 ### Notes on Required Variables
 
 - **Docker Secrets:** Use the `_FILE` suffix to reference mounted secret files instead of passing credentials directly
 - **LAPI_URL:** Must include protocol (http/https) and port. Default is `http://localhost:8080`
 - **Key vs Key_FILE:** Provide either `CROWDSEC_LAPI_KEY` OR `CROWDSEC_LAPI_KEY_FILE`, not both
 - **Password vs Password_FILE:** Provide either `CROWDSEC_MACHINE_PASSWORD` OR `CROWDSEC_MACHINE_PASSWORD_FILE`, not both
+
+---
+
+## LAPI HTTPS and Client Certificate Settings
+
+Use these variables for HTTPS server verification and optional client certificate authentication.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| CROWDSEC_LAPI_CA_CERT_PATH | CA/trust bundle used by this importer to verify the HTTPS certificate served by LAPI | `/certs/crowdsec_lapi.pem` |
+| CROWDSEC_LAPI_CERT_PATH | Client certificate presented to LAPI | `/certs/blocklist-import.pem` |
+| CROWDSEC_LAPI_KEY_PATH | Client private key for the certificate | `/certs/blocklist-import-key.pem` |
+
+`CROWDSEC_LAPI_CA_CERT_PATH` is optional and unrelated to client certificate authentication. It only controls how the importer verifies the LAPI HTTPS server certificate.
+
+`CROWDSEC_LAPI_CERT_PATH` and `CROWDSEC_LAPI_KEY_PATH` are also optional, but they must be set together. When both are set, requests to LAPI use mTLS/client-certificate authentication and the importer does not send the `X-Api-Key` header. If the client certificate/key variables are not set, the existing bouncer API key and machine JWT behavior is unchanged.
+
+```bash
+CROWDSEC_LAPI_URL=https://crowdsec:8080
+CROWDSEC_LAPI_CA_CERT_PATH=/certs/crowdsec_lapi.pem
+```
+
+```bash
+CROWDSEC_LAPI_URL=https://crowdsec:8080
+CROWDSEC_LAPI_CERT_PATH=/certs/blocklist-import.pem
+CROWDSEC_LAPI_KEY_PATH=/certs/blocklist-import-key.pem
+```
 
 ---
 

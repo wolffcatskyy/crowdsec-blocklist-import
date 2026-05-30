@@ -200,11 +200,34 @@ def menu_crowdsec_connection(state):
     )
 
     print()
+    print("  Optional TLS client certificate auth — leave blank unless LAPI requires mTLS.")
+    state["CROWDSEC_LAPI_CA_CERT_PATH"] = prompt_input(
+        "  CROWDSEC_LAPI_CA_CERT_PATH",
+        default=state.get("CROWDSEC_LAPI_CA_CERT_PATH", ""),
+    )
+    state["CROWDSEC_LAPI_CERT_PATH"] = prompt_input(
+        "  CROWDSEC_LAPI_CERT_PATH",
+        default=state.get("CROWDSEC_LAPI_CERT_PATH", ""),
+    )
+    state["CROWDSEC_LAPI_KEY_PATH"] = prompt_input(
+        "  CROWDSEC_LAPI_KEY_PATH",
+        default=state.get("CROWDSEC_LAPI_KEY_PATH", ""),
+    )
+
+    print()
     if state.get("CROWDSEC_LAPI_URL") and prompt_yn("  Test connection now?", default=False):
         url = state["CROWDSEC_LAPI_URL"].rstrip("/")
         try:
             import requests
-            resp = requests.get(f"{url}/health", timeout=5)
+            request_kwargs = {"timeout": 5}
+            if state.get("CROWDSEC_LAPI_CA_CERT_PATH"):
+                request_kwargs["verify"] = state["CROWDSEC_LAPI_CA_CERT_PATH"]
+            if state.get("CROWDSEC_LAPI_CERT_PATH") and state.get("CROWDSEC_LAPI_KEY_PATH"):
+                request_kwargs["cert"] = (
+                    state["CROWDSEC_LAPI_CERT_PATH"],
+                    state["CROWDSEC_LAPI_KEY_PATH"],
+                )
+            resp = requests.get(f"{url}/health", **request_kwargs)
             if resp.status_code == 200:
                 print_status("Health check", "OK (200)", good=True)
             else:
@@ -361,7 +384,8 @@ def _build_env_lines(state):
 
     for key in ("CROWDSEC_LAPI_URL", "CROWDSEC_LAPI_KEY", "CROWDSEC_LAPI_KEY_FILE",
                 "CROWDSEC_MACHINE_ID", "CROWDSEC_MACHINE_PASSWORD",
-                "CROWDSEC_MACHINE_PASSWORD_FILE"):
+                "CROWDSEC_MACHINE_PASSWORD_FILE", "CROWDSEC_LAPI_CA_CERT_PATH",
+                "CROWDSEC_LAPI_CERT_PATH", "CROWDSEC_LAPI_KEY_PATH"):
         if state.get(key):
             lines.append(f"{key}={state[key]}")
 
@@ -531,7 +555,8 @@ def menu_view_config(state):
     sections = {
         "CrowdSec Connection": [
             "CROWDSEC_LAPI_URL", "CROWDSEC_LAPI_KEY", "CROWDSEC_MACHINE_ID",
-            "CROWDSEC_MACHINE_PASSWORD",
+            "CROWDSEC_MACHINE_PASSWORD", "CROWDSEC_LAPI_CA_CERT_PATH",
+            "CROWDSEC_LAPI_CERT_PATH", "CROWDSEC_LAPI_KEY_PATH",
         ],
         "Decision Settings": [
             "DECISION_DURATION", "DECISION_REASON", "DECISION_TYPE",

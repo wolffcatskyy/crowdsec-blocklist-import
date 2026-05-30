@@ -60,6 +60,7 @@ from blocklist_import import (
     sanitize_error_message,
     validate_bool_value,
     validate_enable_env_vars,
+    validate_lapi_tls_paths,
     get_abuseipdb_api_headers,
     get_abuseipdb_api_params,
     get_abuseipdb_api_can_import,
@@ -175,6 +176,15 @@ class TestConfigFromEnv:
         clean_env.setenv("CROWDSEC_LAPI_KEY", "myapikey")
         cfg = Config.from_env()
         assert cfg.lapi_key == "myapikey"
+
+    def test_lapi_tls_paths_loaded(self, clean_env):
+        clean_env.setenv("CROWDSEC_LAPI_CA_CERT_PATH", "/certs/ca.pem")
+        clean_env.setenv("CROWDSEC_LAPI_CERT_PATH", "/certs/client.pem")
+        clean_env.setenv("CROWDSEC_LAPI_KEY_PATH", "/certs/client-key.pem")
+        cfg = Config.from_env()
+        assert cfg.lapi_ca_cert_path == "/certs/ca.pem"
+        assert cfg.lapi_cert_path == "/certs/client.pem"
+        assert cfg.lapi_key_path == "/certs/client-key.pem"
 
     def test_machine_credentials(self, clean_env):
         clean_env.setenv("CROWDSEC_MACHINE_ID", "myid")
@@ -756,6 +766,136 @@ class TestCrowdSecLAPIHealthCheck:
         import requests
         session_mock.get.side_effect = requests.RequestException("timeout")
         assert lapi.health_check() is False
+
+
+class TestCrowdSecLAPITLS:
+    def test_tls_configures_session_cert_and_ca(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="ignored",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            cert_path="/certs/client.pem",
+            key_path="/certs/client-key.pem",
+        )
+        assert lapi_tls.tls_enabled is True
+        assert lapi_tls.session.cert == ("/certs/client.pem", "/certs/client-key.pem")
+        assert lapi_tls.session.verify == "/certs/ca.pem"
+        assert "X-Api-Key" not in lapi_tls.bouncer_headers
+
+    def test_ca_path_only_verifies_server_without_mtls(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="key",
+            machine_id="machine",
+            machine_password="password",
+            logger=logger,
+            ca_cert_path="/certs/crowdsec_lapi.pem",
+        )
+        assert lapi_tls.tls_enabled is False
+        assert lapi_tls.session.verify == "/certs/crowdsec_lapi.pem"
+        assert lapi_tls.bouncer_headers["X-Api-Key"] == "key"
+
+    def test_tls_can_write_without_machine_credentials(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            cert_path="/certs/client.pem",
+            key_path="/certs/client-key.pem",
+        )
+        assert lapi_tls.can_write() is True
+
+    def test_tls_machine_login_can_use_cert_only_payload(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            cert_path="/certs/client.pem",
+            key_path="/certs/client-key.pem",
+        )
+        lapi_tls.session = MagicMock()
+        lapi_tls.session.post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={
+                "token": "tls-jwt",
+                "expire": "2099-01-01T00:00:00Z",
+            }),
+        )
+
+        headers = lapi_tls._get_machine_headers()
+
+        assert headers is not None
+        assert headers["Authorization"] == "Bearer tls-jwt"
+        login_payload = lapi_tls.session.post.call_args.kwargs["json"]
+        assert login_payload == {"scenarios": ["external/blocklist"]}
+
+    def test_tls_machine_login_includes_credentials_when_configured(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="blocklist-import",
+            machine_password="secret",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            cert_path="/certs/client.pem",
+            key_path="/certs/client-key.pem",
+        )
+        lapi_tls.session = MagicMock()
+        lapi_tls.session.post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={
+                "token": "tls-jwt",
+                "expire": "2099-01-01T00:00:00Z",
+            }),
+        )
+
+        headers = lapi_tls._get_machine_headers()
+
+        assert headers is not None
+        assert headers["Authorization"] == "Bearer tls-jwt"
+        login_payload = lapi_tls.session.post.call_args.kwargs["json"]
+        assert login_payload == {
+            "machine_id": "blocklist-import",
+            "password": "secret",
+            "scenarios": ["external/blocklist"],
+        }
+
+    def test_non_tls_keeps_api_key_header(self, lapi):
+        assert lapi.tls_enabled is False
+        assert lapi.bouncer_headers["X-Api-Key"] == "testkey"
+
+    def test_validate_lapi_tls_paths_requires_cert_key_pair(self):
+        errors = validate_lapi_tls_paths(cert_path="/certs/client.pem")
+        assert any("must both be set" in error for error in errors)
+
+    def test_validate_lapi_tls_paths_accepts_existing_files(self, tmp_path):
+        ca = tmp_path / "ca.pem"
+        cert = tmp_path / "client.pem"
+        key = tmp_path / "client-key.pem"
+        for path in (ca, cert, key):
+            path.write_text("test")
+        assert validate_lapi_tls_paths(str(ca), str(cert), str(key)) == []
+
+    def test_validate_lapi_tls_paths_allows_ca_only(self, tmp_path):
+        ca = tmp_path / "ca.pem"
+        ca.write_text("test")
+        assert validate_lapi_tls_paths(ca_cert_path=str(ca)) == []
+
+    def test_validate_lapi_tls_paths_accepts_cert_key_without_ca(self, tmp_path):
+        cert = tmp_path / "client.pem"
+        key = tmp_path / "client-key.pem"
+        for path in (cert, key):
+            path.write_text("test")
+        assert validate_lapi_tls_paths(cert_path=str(cert), key_path=str(key)) == []
 
 
 class TestCrowdSecLAPIGetExistingIPs:
