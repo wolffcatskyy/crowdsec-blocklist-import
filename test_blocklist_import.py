@@ -26,6 +26,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from typing import Optional
 from unittest.mock import MagicMock, Mock, patch, PropertyMock
@@ -54,6 +55,8 @@ from blocklist_import import (
     extract_ips_from_line,
     fetch_blocklist,
     find_similar_vars,
+    get_lapi_user_agent,
+    get_runtime_os_metadata,
     is_private_or_reserved,
     parse_ip_or_network,
     read_secret_file,
@@ -157,6 +160,7 @@ class TestConfigFromEnv:
         assert cfg.metrics_enabled is True
         assert cfg.interval == 0
         assert cfg.run_on_start is True
+        assert cfg.heartbeat_interval == 60
         assert cfg.webhook_url == ""
         assert cfg.webhook_type == "generic"
         assert cfg.abuseipdb_min_confidence == 90
@@ -241,6 +245,11 @@ class TestConfigFromEnv:
         clean_env.setenv("INTERVAL", "3600")
         cfg = Config.from_env()
         assert cfg.interval == 3600
+
+    def test_heartbeat_interval(self, clean_env):
+        clean_env.setenv("CROWDSEC_HEARTBEAT_INTERVAL", "0")
+        cfg = Config.from_env()
+        assert cfg.heartbeat_interval == 0
 
     def test_webhook_type_lowercased(self, clean_env):
         clean_env.setenv("WEBHOOK_TYPE", "Discord")
@@ -793,6 +802,30 @@ class TestCrowdSecLAPIHealthCheck:
         lapi_tls.session.get.assert_not_called()
 
 
+class TestCrowdSecLAPIUserAgent:
+    def test_lapi_user_agent_includes_version(self):
+        with patch("blocklist_import.platform.system", return_value="Linux"):
+            assert get_lapi_user_agent() == f"crowdsec-blocklist-import/{bi.__version__}"
+
+    def test_lapi_headers_use_version_user_agent(self, lapi):
+        assert lapi.bouncer_headers["User-Agent"] == (
+            f"crowdsec-blocklist-import/{bi.__version__}"
+        )
+
+    def test_runtime_os_metadata_uses_os_release(self):
+        os_release = {
+            "ID": "debian",
+            "ID_LIKE": "debian",
+            "VERSION_ID": "12",
+        }
+        with patch("blocklist_import._read_os_release", return_value=os_release):
+            assert get_runtime_os_metadata() == {
+                "name": "debian",
+                "family": "debian",
+                "version": "12",
+            }
+
+
 class TestCrowdSecLAPITLS:
     def test_agent_tls_configures_write_session_cert_and_ca(self, logger):
         lapi_tls = CrowdSecLAPI(
@@ -1290,6 +1323,102 @@ class TestCrowdSecLAPIMachineAuth:
         assert lapi_no_creds.can_write() is False
 
 
+class TestCrowdSecLAPIHeartbeat:
+    def test_heartbeat_success(self, lapi, session_mock):
+        lapi.jwt_token = "fake-jwt-token"
+        lapi.jwt_expires = time.time() + 3600
+        session_mock.get.return_value = Mock(status_code=200)
+
+        assert lapi.heartbeat() is True
+
+        session_mock.get.assert_called_once()
+        args, kwargs = session_mock.get.call_args
+        assert args[0] == "http://localhost:8080/v1/heartbeat"
+        assert kwargs["headers"]["Authorization"] == "Bearer fake-jwt-token"
+        assert kwargs["headers"]["User-Agent"] == (
+            f"crowdsec-blocklist-import/{bi.__version__}"
+        )
+
+    def test_heartbeat_without_machine_auth_returns_false(self, session_mock, logger):
+        lapi_no_creds = CrowdSecLAPI(
+            base_url="http://localhost:8080",
+            api_key="key",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+        )
+        lapi_no_creds.session = session_mock
+
+        assert lapi_no_creds.heartbeat() is False
+        session_mock.get.assert_not_called()
+
+    def test_heartbeat_non_200_returns_false(self, lapi, session_mock):
+        lapi.jwt_token = "fake-jwt-token"
+        lapi.jwt_expires = time.time() + 3600
+        session_mock.get.return_value = Mock(status_code=403, text="forbidden")
+
+        assert lapi.heartbeat() is False
+
+
+class TestCrowdSecLAPIUsageMetrics:
+    def test_send_usage_metrics_success(self, lapi, session_mock):
+        lapi.jwt_token = "fake-jwt-token"
+        lapi.jwt_expires = time.time() + 3600
+        lapi.startup_timestamp = 42
+        session_mock.post.return_value = Mock(status_code=201)
+
+        with patch("blocklist_import.get_runtime_os_metadata", return_value={
+            "name": "debian",
+            "family": "debian",
+            "version": "12",
+        }):
+            assert lapi.send_usage_metrics() is True
+
+        session_mock.post.assert_called_once()
+        args, kwargs = session_mock.post.call_args
+        assert args[0] == "http://localhost:8080/v1/usage-metrics"
+        assert kwargs["headers"]["Authorization"] == "Bearer fake-jwt-token"
+        assert kwargs["json"] == {
+            "log_processors": [
+                {
+                    "version": bi.__version__,
+                    "os": {
+                        "name": "debian",
+                        "family": "debian",
+                        "version": "12",
+                    },
+                    "utc_startup_timestamp": 42,
+                    "metrics": [],
+                    "feature_flags": [],
+                    "datasources": {},
+                    "hub_items": {},
+                }
+            ]
+        }
+
+    def test_send_usage_metrics_without_machine_auth_returns_false(
+        self, session_mock, logger
+    ):
+        lapi_no_creds = CrowdSecLAPI(
+            base_url="http://localhost:8080",
+            api_key="key",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+        )
+        lapi_no_creds.session = session_mock
+
+        assert lapi_no_creds.send_usage_metrics() is False
+        session_mock.post.assert_not_called()
+
+    def test_send_usage_metrics_non_success_returns_false(self, lapi, session_mock):
+        lapi.jwt_token = "fake-jwt-token"
+        lapi.jwt_expires = time.time() + 3600
+        session_mock.post.return_value = Mock(status_code=422, text="invalid")
+
+        assert lapi.send_usage_metrics() is False
+
+
 # ===========================================================================
 # 8. fetch_blocklist()
 # ===========================================================================
@@ -1770,6 +1899,7 @@ class TestDaemonMode:
         config = Config()
         config.interval = 1
         config.run_on_start = False
+        config.heartbeat_interval = 0
 
         calls = []
 
@@ -1798,6 +1928,7 @@ class TestDaemonMode:
         config = Config()
         config.interval = 5
         config.run_on_start = False
+        config.heartbeat_interval = 0
 
         run_count = []
 
@@ -1818,6 +1949,34 @@ class TestDaemonMode:
         # run_import should not have been called because run_on_start=False
         # and signal arrived during the first sleep
         assert len(run_count) == 0
+
+    def test_heartbeat_loop_sends_heartbeat_until_stopped(self, logger):
+        config = Config()
+        config.heartbeat_interval = 60
+        stop_event = threading.Event()
+        lapi = Mock()
+        lapi.can_write.return_value = True
+
+        def fake_wait(seconds):
+            assert seconds == 60
+            stop_event.set()
+            return True
+
+        with patch.object(bi, "create_lapi_client_from_config", return_value=lapi), \
+             patch.object(stop_event, "wait", side_effect=fake_wait):
+            bi._run_heartbeat_loop(config, logger, stop_event)
+
+        lapi.heartbeat.assert_called_once()
+
+    def test_heartbeat_loop_disabled_by_zero_interval(self, logger):
+        config = Config()
+        config.heartbeat_interval = 0
+        stop_event = threading.Event()
+
+        with patch.object(bi, "create_lapi_client_from_config") as create_lapi:
+            bi._run_heartbeat_loop(config, logger, stop_event)
+
+        create_lapi.assert_not_called()
 
 
 # ===========================================================================

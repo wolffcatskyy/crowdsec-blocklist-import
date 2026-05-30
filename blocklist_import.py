@@ -27,9 +27,11 @@ import argparse
 import ipaddress
 import logging
 import os
+import platform
 import re
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -55,6 +57,44 @@ except ImportError:
         pass
 
 __version__ = "3.7.1"
+
+
+def get_lapi_user_agent() -> str:
+    """Return the User-Agent used when authenticating to CrowdSec LAPI."""
+    return f"crowdsec-blocklist-import/{__version__}"
+
+
+def _read_os_release(path: str = "/etc/os-release") -> dict[str, str]:
+    """Read os-release metadata when available."""
+    values: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"')
+    except OSError:
+        pass
+    return values
+
+
+def get_runtime_os_metadata() -> dict[str, str]:
+    """Return OS metadata in CrowdSec usage-metrics format."""
+    os_release = _read_os_release()
+    system_name = platform.system().lower() or "unknown"
+    os_name = os_release.get("ID") or os_release.get("NAME") or system_name
+    os_version = os_release.get("VERSION_ID") or platform.release() or ""
+    os_family = os_release.get("ID_LIKE", "").split(" ", 1)[0]
+    if not os_family:
+        os_family = os_release.get("ID", "") or system_name
+    return {
+        "name": os_name,
+        "family": os_family,
+        "version": os_version,
+    }
+
 
 # =============================================================================
 # Blocklist Sources
@@ -510,6 +550,7 @@ class Config:
     # Daemon mode (built-in scheduler)
     interval: int = 0  # 0 = run once (default), >0 = repeat every N seconds
     run_on_start: bool = True  # Run immediately on start, then wait for interval
+    heartbeat_interval: int = 60  # 0 = disabled, >0 = heartbeat every N seconds
 
     # Webhook notifications
     webhook_url: str = ""
@@ -597,6 +638,7 @@ class Config:
             pushgateway_url=os.getenv("METRICS_PUSHGATEWAY_URL", "localhost:9091"),
             interval=int(os.getenv("INTERVAL", "0")),
             run_on_start=get_bool("RUN_ON_START", True),
+            heartbeat_interval=int(os.getenv("CROWDSEC_HEARTBEAT_INTERVAL", "60")),
             webhook_url=os.getenv("WEBHOOK_URL", ""),
             webhook_type=os.getenv("WEBHOOK_TYPE", "generic").lower(),
             abuseipdb_api_key=os.getenv("ABUSEIPDB_API_KEY", ""),
@@ -1672,6 +1714,7 @@ class CrowdSecLAPI:
         self.logger = logger
         self.jwt_token: Optional[str] = None
         self.jwt_expires: Optional[float] = None
+        self.startup_timestamp = int(time.time())
 
         if ca_cert_path:
             self.session.verify = ca_cert_path
@@ -1701,7 +1744,7 @@ class CrowdSecLAPI:
         # X-Api-Key so CrowdSec can authenticate the bouncer certificate.
         self.bouncer_headers = {
             "Content-Type": "application/json",
-            "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+            "User-Agent": get_lapi_user_agent(),
         }
         if not self.bouncer_tls_enabled and api_key:
             self.bouncer_headers["X-Api-Key"] = api_key
@@ -1732,7 +1775,7 @@ class CrowdSecLAPI:
                 json=auth_payload,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+                    "User-Agent": get_lapi_user_agent(),
                 },
                 timeout=10,
             )
@@ -1770,7 +1813,7 @@ class CrowdSecLAPI:
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+            "User-Agent": get_lapi_user_agent(),
         }
 
     def health_check(self) -> bool:
@@ -1787,6 +1830,68 @@ class CrowdSecLAPI:
         except requests.RequestException as e:
             self.logger.error(f"LAPI health check failed: {e}")
             return False
+
+    def heartbeat(self) -> bool:
+        """Send a machine heartbeat to CrowdSec LAPI."""
+        headers = self._get_machine_headers()
+        if not headers:
+            self.logger.warning("Cannot send machine heartbeat without machine authentication")
+            return False
+
+        try:
+            response = self.session.get(
+                f"{self.base_url}/v1/heartbeat",
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                self.logger.debug("Machine heartbeat sent")
+                return True
+            self.logger.warning(
+                f"Machine heartbeat failed: {response.status_code} {response.text[:200]}"
+            )
+        except requests.RequestException as e:
+            self.logger.warning(f"Machine heartbeat request failed: {e}")
+        return False
+
+    def send_usage_metrics(self) -> bool:
+        """Send machine version and OS metadata to CrowdSec LAPI."""
+        headers = self._get_machine_headers()
+        if not headers:
+            self.logger.warning("Cannot send machine metadata without machine authentication")
+            return False
+
+        payload = {
+            "log_processors": [
+                {
+                    "version": __version__,
+                    "os": get_runtime_os_metadata(),
+                    "utc_startup_timestamp": self.startup_timestamp,
+                    "metrics": [],
+                    "feature_flags": [],
+                    "datasources": {},
+                    "hub_items": {},
+                }
+            ]
+        }
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/v1/usage-metrics",
+                json=payload,
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code in (200, 201, 204):
+                self.logger.debug("Machine usage metadata sent")
+                return True
+            self.logger.warning(
+                f"Machine usage metadata failed: {response.status_code} "
+                f"{response.text[:200]}"
+            )
+        except requests.RequestException as e:
+            self.logger.warning(f"Machine usage metadata request failed: {e}")
+        return False
 
     def can_write(self) -> bool:
         """Check if we have credentials for write operations."""
@@ -2014,35 +2119,11 @@ def read_secret_file(file_path: str) -> str:
         return ''.join(lines).strip()
 
 
-def run_import(config: Config, logger: logging.Logger) -> ImportStats:
-    """
-    Run the blocklist import.
-
-    Memory efficient implementation using generators and batching.
-    """
-    stats = ImportStats()
-    start_time = time.time()
-
-    logger.info(f"CrowdSec Blocklist Import v{__version__}")
-    logger.info(f"Decision duration: {config.decision_duration}")
-    logger.info(f"LAPI URL: {config.lapi_url}")
-    logger.info(f"Machine ID: {config.machine_id}")
-    logger.info(f"Mode: {config.mode}")
-
-    if config.dry_run:
-        logger.info("DRY RUN MODE - no changes will be made")
-    if config.max_decisions > 0:
-        logger.info(f"MAX_DECISIONS: {config.max_decisions} (will cap total decisions)")
-
-    # Create HTTP session with retry logic
-    session = create_http_session(config.max_retries)
-
-    # Build CIDR-aware allowlist
-    allowlist = build_allowlist(config, session=session, logger=logger)
-    metrics = get_metrics()
-
-    # Read secrets from files if _FILE env vars are set (Docker secrets pattern)
-    # _FILE takes precedence over direct value
+def create_lapi_client_from_config(
+    config: Config,
+    logger: logging.Logger,
+) -> Optional[CrowdSecLAPI]:
+    """Create a CrowdSec LAPI client from config and secret files."""
     lapi_key = config.lapi_key
     if config.lapi_key_file:
         lapi_key = read_secret_file(config.lapi_key_file)
@@ -2079,10 +2160,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     if tls_errors:
         for error in tls_errors:
             logger.error(error)
-        return stats
+        return None
 
-    # Initialize LAPI client
-    lapi = CrowdSecLAPI(
+    return CrowdSecLAPI(
         base_url=config.lapi_url,
         api_key=lapi_key,
         machine_id=config.machine_id,
@@ -2095,6 +2175,38 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         bouncer_key_path=config.lapi_bouncer_key_path,
     )
 
+
+def run_import(config: Config, logger: logging.Logger) -> ImportStats:
+    """
+    Run the blocklist import.
+
+    Memory efficient implementation using generators and batching.
+    """
+    stats = ImportStats()
+    start_time = time.time()
+
+    logger.info(f"CrowdSec Blocklist Import v{__version__}")
+    logger.info(f"Decision duration: {config.decision_duration}")
+    logger.info(f"LAPI URL: {config.lapi_url}")
+    logger.info(f"Machine ID: {config.machine_id}")
+    logger.info(f"Mode: {config.mode}")
+
+    if config.dry_run:
+        logger.info("DRY RUN MODE - no changes will be made")
+    if config.max_decisions > 0:
+        logger.info(f"MAX_DECISIONS: {config.max_decisions} (will cap total decisions)")
+
+    # Create HTTP session with retry logic
+    session = create_http_session(config.max_retries)
+
+    # Build CIDR-aware allowlist
+    allowlist = build_allowlist(config, session=session, logger=logger)
+    metrics = get_metrics()
+
+    lapi = create_lapi_client_from_config(config, logger)
+    if lapi is None:
+        return stats
+
     if config.abuseipdb_api_key_file:
         config.abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
         logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
@@ -2102,7 +2214,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     # Check LAPI connectivity (unless dry run)
     if not config.dry_run:
         # Need bouncer key, machine creds, or client certificate auth.
-        if not lapi.tls_enabled and not lapi_key and not (config.machine_id and machine_password):
+        if (
+            not lapi.tls_enabled
+            and not lapi.api_key
+            and not (lapi.machine_id and lapi.machine_password)
+        ):
             logger.error(
                 "Authentication required. Set either:\n"
                 "  - CROWDSEC_LAPI_KEY or CROWDSEC_LAPI_KEY_FILE (bouncer key for read-only)\n"
@@ -2129,6 +2245,9 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.error("Cannot connect to CrowdSec LAPI")
             return stats
 
+        if config.heartbeat_interval > 0:
+            lapi.heartbeat()
+        lapi.send_usage_metrics()
         logger.info("Connected to CrowdSec LAPI")
 
     # Get existing decisions to avoid duplicates
@@ -2567,6 +2686,7 @@ Environment Variables:
   METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
   INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0)
   RUN_ON_START             In daemon mode, run immediately on start (default: true)
+  CROWDSEC_HEARTBEAT_INTERVAL  Machine heartbeat seconds (0=disabled, default: 60)
   WEBHOOK_URL              Webhook URL for notifications (Discord/Slack/generic)
   WEBHOOK_TYPE             Webhook format: generic, discord, slack (default: generic)
   ABUSEIPDB_API_KEY        AbuseIPDB API key for direct blacklist queries
@@ -2671,6 +2791,16 @@ cause the program to exit with an error. Unknown ENABLE_* variables
     )
 
     parser.add_argument(
+        "--heartbeat-interval",
+        type=int,
+        metavar="SECONDS",
+        help=(
+            "Machine heartbeat interval in seconds "
+            "(0=disabled, overrides CROWDSEC_HEARTBEAT_INTERVAL)"
+        ),
+    )
+
+    parser.add_argument(
         "--webhook-url",
         help="Webhook URL for notifications (overrides WEBHOOK_URL)",
     )
@@ -2731,6 +2861,8 @@ def main() -> int:
         config.metrics_enabled = False
     if args.interval is not None:
         config.interval = args.interval
+    if args.heartbeat_interval is not None:
+        config.heartbeat_interval = args.heartbeat_interval
     if args.webhook_url:
         config.webhook_url = args.webhook_url
     if args.webhook_type:
@@ -2810,14 +2942,55 @@ def _run_once(config: Config, logger: logging.Logger) -> int:
         return 1
 
 
+def _run_heartbeat_loop(
+    config: Config,
+    logger: logging.Logger,
+    stop_event: threading.Event,
+) -> None:
+    """Send CrowdSec LAPI heartbeats until stopped."""
+    if config.dry_run or config.heartbeat_interval <= 0:
+        return
+
+    lapi = create_lapi_client_from_config(config, logger)
+    if lapi is None or not lapi.can_write():
+        logger.warning("Machine heartbeat loop disabled: no machine authentication")
+        return
+
+    while not stop_event.is_set():
+        lapi.heartbeat()
+        stop_event.wait(config.heartbeat_interval)
+
+
+def _start_heartbeat_loop(
+    config: Config,
+    logger: logging.Logger,
+) -> tuple[Optional[threading.Thread], threading.Event]:
+    """Start the daemon heartbeat loop when enabled."""
+    stop_event = threading.Event()
+    if config.dry_run or config.heartbeat_interval <= 0:
+        return None, stop_event
+
+    thread = threading.Thread(
+        target=_run_heartbeat_loop,
+        args=(config, logger, stop_event),
+        name="crowdsec-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    logger.info(f"Machine heartbeat interval: {config.heartbeat_interval}s")
+    return thread, stop_event
+
+
 def _run_daemon(config: Config, logger: logging.Logger) -> int:
     """Run in daemon mode: repeat imports on a fixed interval."""
     shutdown = False
+    heartbeat_thread, heartbeat_stop = _start_heartbeat_loop(config, logger)
 
     def _signal_handler(signum: object, _: object):
         nonlocal shutdown
         logger.info(f"Received signal {signum}, shutting down after current run...")
         shutdown = True
+        heartbeat_stop.set()
 
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
@@ -2850,6 +3023,9 @@ def _run_daemon(config: Config, logger: logging.Logger) -> int:
             elapsed += 5
 
     logger.info("Daemon stopped")
+    heartbeat_stop.set()
+    if heartbeat_thread is not None:
+        heartbeat_thread.join(timeout=5)
     return 0
 
 

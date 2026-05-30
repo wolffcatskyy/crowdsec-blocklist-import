@@ -61,6 +61,7 @@ This is the difference between reactive security (waiting for alerts) and **acti
 - **Grafana Dashboard** -- Pre-built [dashboard](grafana-dashboard.json) for visualizing import metrics
 - **Docker Secrets** -- All credential variables support `_FILE` suffix for mounted secret files
 - **Consolidated Alerts** -- Optionally batch all IPs into a single alert per run to save CrowdSec alert quota
+- **Machine Status** -- Sends LAPI heartbeat and OS metadata so `cscli machines list` shows recent activity
 
 ---
 
@@ -95,6 +96,7 @@ services:
       - CROWDSEC_MACHINE_PASSWORD=SecurePassword123
       - DECISION_DURATION=24h
       - INTERVAL=3600           # Run every hour (built-in scheduler)
+      - CROWDSEC_HEARTBEAT_INTERVAL=60
       - LOG_LEVEL=INFO
 
 networks:
@@ -256,6 +258,7 @@ api:
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | `DRY_RUN` | `false` | Preview without importing |
 | `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = single run) |
+| `CROWDSEC_HEARTBEAT_INTERVAL` | `60` | Machine heartbeat interval in seconds (0 = disabled) |
 | `CONSOLIDATE_ALERTS` | `false` | Batch all IPs into one alert per run (saves alert quota) |
 
 ### Notification Settings
@@ -392,7 +395,10 @@ Run as a long-lived service instead of using cron:
 ```bash
 INTERVAL=3600         # Run every hour
 RUN_ON_START=false    # Skip the first run and wait for the interval
+CROWDSEC_HEARTBEAT_INTERVAL=60  # Keep cscli machines list heartbeat fresh
 ```
+
+The daemon sends a machine heartbeat every 60 seconds by default, matching CrowdSec's own client behavior. Set `CROWDSEC_HEARTBEAT_INTERVAL=0` to disable it.
 
 The daemon handles SIGTERM/SIGINT gracefully -- it finishes the current run, then exits. This makes it Docker-friendly with `restart: unless-stopped`.
 

@@ -34,6 +34,14 @@ For HTTPS LAPI deployments, `CROWDSEC_LAPI_CA_CERT_PATH` can be used to verify t
 
 ---
 
+## Machine Status
+
+The importer sends CrowdSec LAPI machine heartbeats when machine authentication is configured. In daemon mode, the heartbeat runs every `CROWDSEC_HEARTBEAT_INTERVAL` seconds. The default is `60`, matching CrowdSec's own client heartbeat interval; set it to `0` to disable heartbeat updates. In single-run mode, the importer sends one heartbeat when heartbeats are enabled.
+
+The importer also sends a minimal CrowdSec usage-metrics payload with its version and runtime OS metadata. CrowdSec uses that payload to populate the `Version` and `OS` columns in `cscli machines list`.
+
+---
+
 ## LAPI HTTPS and Client Certificate Settings
 
 Use these variables for HTTPS server verification and optional client certificate authentication.
@@ -115,6 +123,9 @@ Controls import behavior, performance, and output formatting.
 | MAX_RETRIES | `3` | Retry count on failed imports | `1`, `5`, `10` |
 | LOG_LEVEL | `INFO` | Logging verbosity level | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | DRY_RUN | `false` | Preview import without applying decisions | `true`, `false` |
+| INTERVAL | `0` | Built-in scheduler interval in seconds. 0 = single run | `3600`, `86400` |
+| RUN_ON_START | `true` | In daemon mode, run immediately before waiting for `INTERVAL` | `true`, `false` |
+| CROWDSEC_HEARTBEAT_INTERVAL | `60` | Machine heartbeat interval in seconds. 0 = disabled | `60`, `0` |
 | CONSOLIDATE_ALERTS | `false` | Combine all IPs into a single CrowdSec alert per run | `true`, `false` |
 | MAX_DECISIONS | `0` | Cap total decisions (existing + new). 0 = unlimited | `50000`, `100000` |
 
