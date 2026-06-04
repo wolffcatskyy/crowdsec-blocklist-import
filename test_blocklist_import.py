@@ -830,6 +830,20 @@ class TestCrowdSecLAPITLS:
         assert lapi_tls.bouncer_session.verify == "/certs/ca.pem"
         assert "X-Api-Key" not in lapi_tls.bouncer_headers
 
+    def test_bouncer_tls_warns_when_lapi_url_is_not_https(self, logger):
+        with patch.object(logger, "warning") as warning:
+            CrowdSecLAPI(
+                base_url="http://localhost:8080",
+                api_key="",
+                machine_id="",
+                machine_password="",
+                logger=logger,
+                bouncer_cert_path="/certs/bouncer.pem",
+                bouncer_key_path="/certs/bouncer-key.pem",
+            )
+
+        warning.assert_called_once()
+
     def test_agent_and_bouncer_tls_use_separate_sessions(self, logger):
         lapi_tls = CrowdSecLAPI(
             base_url="https://localhost:8080",

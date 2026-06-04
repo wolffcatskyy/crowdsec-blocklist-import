@@ -1678,6 +1678,8 @@ class CrowdSecLAPI:
         if self.agent_tls_enabled:
             self.session.cert = (agent_cert_path, agent_key_path)
             self.logger.debug("Configured LAPI agent certificate authentication")
+
+        if self.agent_tls_enabled or self.bouncer_tls_enabled:
             if not self.base_url.startswith("https://"):
                 self.logger.warning(
                     "LAPI URL does not use HTTPS; client certificates are only "
@@ -1685,7 +1687,6 @@ class CrowdSecLAPI:
                     "for mTLS authentication."
                 )
 
-        if self.agent_tls_enabled or self.bouncer_tls_enabled:
             self.bouncer_session = create_http_session(10)
             if ca_cert_path:
                 self.bouncer_session.verify = ca_cert_path
