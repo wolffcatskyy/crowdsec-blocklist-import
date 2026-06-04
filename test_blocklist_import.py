@@ -124,6 +124,7 @@ def lapi(session_mock, logger):
         logger=logger,
     )
     obj.session = session_mock
+    obj.bouncer_session = session_mock
     return obj
 
 
@@ -179,12 +180,16 @@ class TestConfigFromEnv:
 
     def test_lapi_tls_paths_loaded(self, clean_env):
         clean_env.setenv("CROWDSEC_LAPI_CA_CERT_PATH", "/certs/ca.pem")
-        clean_env.setenv("CROWDSEC_LAPI_CERT_PATH", "/certs/client.pem")
-        clean_env.setenv("CROWDSEC_LAPI_KEY_PATH", "/certs/client-key.pem")
+        clean_env.setenv("CROWDSEC_LAPI_AGENT_CERT_PATH", "/certs/agent.pem")
+        clean_env.setenv("CROWDSEC_LAPI_AGENT_KEY_PATH", "/certs/agent-key.pem")
+        clean_env.setenv("CROWDSEC_LAPI_BOUNCER_CERT_PATH", "/certs/bouncer.pem")
+        clean_env.setenv("CROWDSEC_LAPI_BOUNCER_KEY_PATH", "/certs/bouncer-key.pem")
         cfg = Config.from_env()
         assert cfg.lapi_ca_cert_path == "/certs/ca.pem"
-        assert cfg.lapi_cert_path == "/certs/client.pem"
-        assert cfg.lapi_key_path == "/certs/client-key.pem"
+        assert cfg.lapi_agent_cert_path == "/certs/agent.pem"
+        assert cfg.lapi_agent_key_path == "/certs/agent-key.pem"
+        assert cfg.lapi_bouncer_cert_path == "/certs/bouncer.pem"
+        assert cfg.lapi_bouncer_key_path == "/certs/bouncer-key.pem"
 
     def test_machine_credentials(self, clean_env):
         clean_env.setenv("CROWDSEC_MACHINE_ID", "myid")
@@ -767,9 +772,29 @@ class TestCrowdSecLAPIHealthCheck:
         session_mock.get.side_effect = requests.RequestException("timeout")
         assert lapi.health_check() is False
 
+    def test_health_check_uses_bouncer_session_for_bouncer_tls(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
+            bouncer_cert_path="/certs/bouncer.pem",
+            bouncer_key_path="/certs/bouncer-key.pem",
+        )
+        lapi_tls.session = MagicMock()
+        lapi_tls.bouncer_session = MagicMock()
+        lapi_tls.bouncer_session.get.return_value = Mock(status_code=200)
+
+        assert lapi_tls.health_check() is True
+        lapi_tls.bouncer_session.get.assert_called_once()
+        lapi_tls.session.get.assert_not_called()
+
 
 class TestCrowdSecLAPITLS:
-    def test_tls_configures_session_cert_and_ca(self, logger):
+    def test_agent_tls_configures_write_session_cert_and_ca(self, logger):
         lapi_tls = CrowdSecLAPI(
             base_url="https://localhost:8080",
             api_key="ignored",
@@ -777,13 +802,52 @@ class TestCrowdSecLAPITLS:
             machine_password="",
             logger=logger,
             ca_cert_path="/certs/ca.pem",
-            cert_path="/certs/client.pem",
-            key_path="/certs/client-key.pem",
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
         )
         assert lapi_tls.tls_enabled is True
-        assert lapi_tls.session.cert == ("/certs/client.pem", "/certs/client-key.pem")
+        assert lapi_tls.agent_tls_enabled is True
+        assert lapi_tls.session.cert == ("/certs/agent.pem", "/certs/agent-key.pem")
         assert lapi_tls.session.verify == "/certs/ca.pem"
+
+    def test_bouncer_tls_configures_read_session_cert_and_ca(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="ignored",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            bouncer_cert_path="/certs/bouncer.pem",
+            bouncer_key_path="/certs/bouncer-key.pem",
+        )
+        assert lapi_tls.tls_enabled is True
+        assert lapi_tls.bouncer_tls_enabled is True
+        assert lapi_tls.bouncer_session.cert == (
+            "/certs/bouncer.pem",
+            "/certs/bouncer-key.pem",
+        )
+        assert lapi_tls.bouncer_session.verify == "/certs/ca.pem"
         assert "X-Api-Key" not in lapi_tls.bouncer_headers
+
+    def test_agent_and_bouncer_tls_use_separate_sessions(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="ignored",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
+            bouncer_cert_path="/certs/bouncer.pem",
+            bouncer_key_path="/certs/bouncer-key.pem",
+        )
+        assert lapi_tls.session.cert == ("/certs/agent.pem", "/certs/agent-key.pem")
+        assert lapi_tls.bouncer_session.cert == (
+            "/certs/bouncer.pem",
+            "/certs/bouncer-key.pem",
+        )
 
     def test_ca_path_only_verifies_server_without_mtls(self, logger):
         lapi_tls = CrowdSecLAPI(
@@ -796,9 +860,10 @@ class TestCrowdSecLAPITLS:
         )
         assert lapi_tls.tls_enabled is False
         assert lapi_tls.session.verify == "/certs/crowdsec_lapi.pem"
+        assert lapi_tls.bouncer_session.verify == "/certs/crowdsec_lapi.pem"
         assert lapi_tls.bouncer_headers["X-Api-Key"] == "key"
 
-    def test_tls_can_write_without_machine_credentials(self, logger):
+    def test_agent_tls_can_write_without_machine_credentials(self, logger):
         lapi_tls = CrowdSecLAPI(
             base_url="https://localhost:8080",
             api_key="",
@@ -806,12 +871,12 @@ class TestCrowdSecLAPITLS:
             machine_password="",
             logger=logger,
             ca_cert_path="/certs/ca.pem",
-            cert_path="/certs/client.pem",
-            key_path="/certs/client-key.pem",
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
         )
         assert lapi_tls.can_write() is True
 
-    def test_tls_machine_login_can_use_cert_only_payload(self, logger):
+    def test_bouncer_tls_cannot_write_without_machine_credentials(self, logger):
         lapi_tls = CrowdSecLAPI(
             base_url="https://localhost:8080",
             api_key="",
@@ -819,8 +884,21 @@ class TestCrowdSecLAPITLS:
             machine_password="",
             logger=logger,
             ca_cert_path="/certs/ca.pem",
-            cert_path="/certs/client.pem",
-            key_path="/certs/client-key.pem",
+            bouncer_cert_path="/certs/bouncer.pem",
+            bouncer_key_path="/certs/bouncer-key.pem",
+        )
+        assert lapi_tls.can_write() is False
+
+    def test_agent_tls_machine_login_can_use_cert_only_payload(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            ca_cert_path="/certs/ca.pem",
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
         )
         lapi_tls.session = MagicMock()
         lapi_tls.session.post.return_value = Mock(
@@ -838,7 +916,7 @@ class TestCrowdSecLAPITLS:
         login_payload = lapi_tls.session.post.call_args.kwargs["json"]
         assert login_payload == {"scenarios": ["external/blocklist"]}
 
-    def test_tls_machine_login_includes_credentials_when_configured(self, logger):
+    def test_agent_tls_machine_login_includes_credentials_when_configured(self, logger):
         lapi_tls = CrowdSecLAPI(
             base_url="https://localhost:8080",
             api_key="",
@@ -846,8 +924,8 @@ class TestCrowdSecLAPITLS:
             machine_password="secret",
             logger=logger,
             ca_cert_path="/certs/ca.pem",
-            cert_path="/certs/client.pem",
-            key_path="/certs/client-key.pem",
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
         )
         lapi_tls.session = MagicMock()
         lapi_tls.session.post.return_value = Mock(
@@ -874,7 +952,11 @@ class TestCrowdSecLAPITLS:
         assert lapi.bouncer_headers["X-Api-Key"] == "testkey"
 
     def test_validate_lapi_tls_paths_requires_cert_key_pair(self):
-        errors = validate_lapi_tls_paths(cert_path="/certs/client.pem")
+        errors = validate_lapi_tls_paths(
+            cert_path="/certs/agent.pem",
+            cert_env_name="CROWDSEC_LAPI_AGENT_CERT_PATH",
+            key_env_name="CROWDSEC_LAPI_AGENT_KEY_PATH",
+        )
         assert any("must both be set" in error for error in errors)
 
     def test_validate_lapi_tls_paths_accepts_existing_files(self, tmp_path):
@@ -896,6 +978,17 @@ class TestCrowdSecLAPITLS:
         for path in (cert, key):
             path.write_text("test")
         assert validate_lapi_tls_paths(cert_path=str(cert), key_path=str(key)) == []
+
+    def test_warn_lapi_private_key_permissions_warns_for_loose_key(self, tmp_path, logger):
+        key = tmp_path / "client-key.pem"
+        key.write_text("test")
+        key.chmod(0o644)
+        with patch.object(logger, "warning") as warning:
+            bi.warn_lapi_private_key_permissions(
+                logger,
+                {"CROWDSEC_LAPI_AGENT_KEY_PATH": str(key)},
+            )
+        warning.assert_called_once()
 
 
 class TestCrowdSecLAPIGetExistingIPs:
@@ -939,6 +1032,59 @@ class TestCrowdSecLAPIGetExistingIPs:
         )
         existing = lapi.get_existing_ips()
         assert existing == []
+
+    def test_bouncer_tls_uses_bouncer_session_for_decision_reads(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
+            bouncer_cert_path="/certs/bouncer.pem",
+            bouncer_key_path="/certs/bouncer-key.pem",
+        )
+        lapi_tls.session = MagicMock()
+        lapi_tls.bouncer_session = MagicMock()
+        lapi_tls.bouncer_session.get.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value=[{"value": "1.2.3.4"}]),
+        )
+
+        existing = lapi_tls.get_existing_ips()
+
+        assert existing == [("1.2.3.4", timedelta(seconds=0))]
+        lapi_tls.bouncer_session.get.assert_called_once()
+        lapi_tls.session.get.assert_not_called()
+        headers = lapi_tls.bouncer_session.get.call_args.kwargs["headers"]
+        assert "X-Api-Key" not in headers
+
+    def test_agent_tls_with_api_key_reads_without_agent_cert(self, logger):
+        lapi_tls = CrowdSecLAPI(
+            base_url="https://localhost:8080",
+            api_key="key",
+            machine_id="",
+            machine_password="",
+            logger=logger,
+            agent_cert_path="/certs/agent.pem",
+            agent_key_path="/certs/agent-key.pem",
+        )
+        lapi_tls.session = MagicMock()
+        lapi_tls.bouncer_session = MagicMock()
+        lapi_tls.bouncer_session.cert = None
+        lapi_tls.bouncer_session.get.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value=[{"value": "5.6.7.8"}]),
+        )
+
+        existing = lapi_tls.get_existing_ips()
+
+        assert existing == [("5.6.7.8", timedelta(seconds=0))]
+        assert lapi_tls.bouncer_session.cert is None
+        assert lapi_tls.bouncer_headers["X-Api-Key"] == "key"
+        lapi_tls.bouncer_session.get.assert_called_once()
+        lapi_tls.session.get.assert_not_called()
 
 
 class TestCrowdSecLAPIAddDecisions:

@@ -23,7 +23,7 @@ These variables must be set before the application can run. The application will
 | CROWDSEC_MACHINE_ID | Machine identifier for authentication | `blocklist-import` |
 | CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE | Machine password or path to Docker secret file | `mypassword` or `/run/secrets/machine_password` |
 
-For HTTPS LAPI deployments, `CROWDSEC_LAPI_CA_CERT_PATH` can be used to verify the HTTPS certificate served by LAPI. For LAPI client certificate authentication, `CROWDSEC_LAPI_CERT_PATH` and `CROWDSEC_LAPI_KEY_PATH` can be used instead of the bouncer key and machine credentials. These settings are independent.
+For HTTPS LAPI deployments, `CROWDSEC_LAPI_CA_CERT_PATH` can be used to verify the HTTPS certificate served by LAPI. For LAPI client certificate authentication, agent and bouncer certificate pairs can be used for their respective CrowdSec auth middlewares. These settings are independent.
 
 ### Notes on Required Variables
 
@@ -41,12 +41,14 @@ Use these variables for HTTPS server verification and optional client certificat
 | Variable | Description | Example |
 |----------|-------------|---------|
 | CROWDSEC_LAPI_CA_CERT_PATH | CA/trust bundle used by this importer to verify the HTTPS certificate served by LAPI | `/certs/crowdsec_lapi.pem` |
-| CROWDSEC_LAPI_CERT_PATH | Client certificate presented to LAPI | `/certs/blocklist-import.pem` |
-| CROWDSEC_LAPI_KEY_PATH | Client private key for the certificate | `/certs/blocklist-import-key.pem` |
+| CROWDSEC_LAPI_AGENT_CERT_PATH | Agent client certificate used for watcher login/JWT write auth | `/certs/blocklist-import-agent.pem` |
+| CROWDSEC_LAPI_AGENT_KEY_PATH | Agent client private key | `/certs/blocklist-import-agent-key.pem` |
+| CROWDSEC_LAPI_BOUNCER_CERT_PATH | Bouncer client certificate used for decision reads | `/certs/blocklist-import-bouncer.pem` |
+| CROWDSEC_LAPI_BOUNCER_KEY_PATH | Bouncer client private key | `/certs/blocklist-import-bouncer-key.pem` |
 
 `CROWDSEC_LAPI_CA_CERT_PATH` is optional and unrelated to client certificate authentication. It only controls how the importer verifies the LAPI HTTPS server certificate.
 
-`CROWDSEC_LAPI_CERT_PATH` and `CROWDSEC_LAPI_KEY_PATH` are also optional, but they must be set together. When both are set, requests to LAPI use mTLS/client-certificate authentication and the importer does not send the `X-Api-Key` header. If the client certificate/key variables are not set, the existing bouncer API key and machine JWT behavior is unchanged.
+The agent and bouncer client certificate/key pairs are optional, but each pair must be set together if used. CrowdSec uses agent certificates for watcher login/JWT endpoints such as `/v1/alerts`, while bouncer certificates are used for bouncer endpoints such as `/v1/decisions`. If client certificate/key variables are not set, the existing bouncer API key and machine JWT behavior is unchanged.
 
 ```bash
 CROWDSEC_LAPI_URL=https://crowdsec:8080
@@ -55,8 +57,10 @@ CROWDSEC_LAPI_CA_CERT_PATH=/certs/crowdsec_lapi.pem
 
 ```bash
 CROWDSEC_LAPI_URL=https://crowdsec:8080
-CROWDSEC_LAPI_CERT_PATH=/certs/blocklist-import.pem
-CROWDSEC_LAPI_KEY_PATH=/certs/blocklist-import-key.pem
+CROWDSEC_LAPI_AGENT_CERT_PATH=/certs/blocklist-import-agent.pem
+CROWDSEC_LAPI_AGENT_KEY_PATH=/certs/blocklist-import-agent-key.pem
+CROWDSEC_LAPI_BOUNCER_CERT_PATH=/certs/blocklist-import-bouncer.pem
+CROWDSEC_LAPI_BOUNCER_KEY_PATH=/certs/blocklist-import-bouncer-key.pem
 ```
 
 ---
