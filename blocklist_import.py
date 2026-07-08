@@ -2347,30 +2347,26 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.debug(f"DRY RUN: Would import {len(deferred_ips)} IPs in single alert")
             stats.imported_ok += len(deferred_ips)
         else:
-            # Send all deferred IPs in batches but under a single generic source label
+            # Send all deferred IPs in a single alert
             consolidated_reason = f"{config.decision_reason} (all sources)"
             consolidated_scenario = f"{config.decision_scenario} (all sources)"
-            remaining = deferred_ips
-            while remaining:
-                chunk = remaining[:config.batch_size]
-                remaining = remaining[config.batch_size:]
-                ok, failed = lapi.add_decisions(
-                    ips=chunk,
-                    duration=config.decision_duration,
-                    reason=consolidated_reason,
-                    decision_type=config.decision_type,
-                    origin=config.decision_origin,
-                    scenario=consolidated_scenario,
-                )
-                stats.imported_ok += ok
-                stats.imported_failed += failed
+            ok, failed = lapi.add_decisions(
+                ips=deferred_ips,
+                duration=config.decision_duration,
+                reason=consolidated_reason,
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=consolidated_scenario,
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
 
-                if failed > 0 and metrics:
-                    metrics.errors_total.labels(
-                        error_type="import",
-                        source="consolidated",
-                        message="lapi_write_failure",
-                    ).set(failed)
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source="consolidated",
+                    message="lapi_write_failure",
+                ).set(failed)
 
         logger.info(f"Consolidated alert: {stats.imported_ok} IPs imported")
 
