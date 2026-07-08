@@ -1,8 +1,8 @@
 # CrowdSec Blocklist Import - Configuration Reference
 
-**Version:** 3.6.0
+**Version:** 3.7.1
 **Configuration Method:** Environment Variables (no YAML config file)
-**Last Updated:** 2026-03-04
+**Last Updated:** 2026-07-08
 
 ---
 
