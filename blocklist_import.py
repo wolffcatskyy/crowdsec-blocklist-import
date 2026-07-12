@@ -182,12 +182,12 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     BlocklistSource(
         name="Firehol level1",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
-        enabled_key="enable_firehol",
+        enabled_key="enable_firehol_level1",
     ),
     BlocklistSource(
         name="Firehol level2",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
-        enabled_key="enable_firehol",
+        enabled_key="enable_firehol_level2",
     ),
     # Abuse.ch
     BlocklistSource(
@@ -303,7 +303,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     BlocklistSource(
         name="Firehol level3",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
-        enabled_key="enable_firehol",
+        enabled_key="enable_firehol_level3",
     ),
     # Maltrail mass scanners
     BlocklistSource(
@@ -537,6 +537,9 @@ class Config:
     enable_spamhaus: bool = True
     enable_blocklist_de: bool = True
     enable_firehol: bool = True
+    enable_firehol_level1: bool = True
+    enable_firehol_level2: bool = True
+    enable_firehol_level3: bool = True
     enable_abuse_ch: bool = True
     enable_emerging_threats: bool = True
     enable_binary_defense: bool = True
@@ -562,6 +565,20 @@ class Config:
         def get_bool(key: str, default: bool = True) -> bool:
             val = os.getenv(key, str(default)).lower()
             return val in ("true", "1", "yes", "on")
+
+        def get_bool_or_none(key: str) -> Optional[bool]:
+            val = os.getenv(key)
+            if val is None:
+                return None
+            return val.lower() in ("true", "1", "yes", "on")
+
+        # Firehol master switch + optional per-level overrides.
+        # Each ENABLE_FIREHOL_LEVELn falls back to the master ENABLE_FIREHOL
+        # when unset, preserving the original all-or-nothing behaviour.
+        firehol_master = get_bool("ENABLE_FIREHOL")
+        fh_l1 = get_bool_or_none("ENABLE_FIREHOL_LEVEL1")
+        fh_l2 = get_bool_or_none("ENABLE_FIREHOL_LEVEL2")
+        fh_l3 = get_bool_or_none("ENABLE_FIREHOL_LEVEL3")
 
         return cls(
             lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
@@ -608,7 +625,10 @@ class Config:
             enable_ipsum=get_bool("ENABLE_IPSUM"),
             enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
             enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
-            enable_firehol=get_bool("ENABLE_FIREHOL"),
+            enable_firehol=firehol_master,
+            enable_firehol_level1=fh_l1 if fh_l1 is not None else firehol_master,
+            enable_firehol_level2=fh_l2 if fh_l2 is not None else firehol_master,
+            enable_firehol_level3=fh_l3 if fh_l3 is not None else firehol_master,
             enable_abuse_ch=get_bool("ENABLE_ABUSE_CH"),
             enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS"),
             enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE"),
@@ -2575,7 +2595,10 @@ Environment Variables:
   ENABLE_IPSUM             Enable IPsum blocklist (default: true)
   ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
   ENABLE_BLOCKLIST_DE      Enable Blocklist.de feeds (default: true)
-  ENABLE_FIREHOL           Enable Firehol levels 1/2/3 (default: true)
+  ENABLE_FIREHOL           Enable all Firehol levels 1/2/3 (master switch, default: true)
+  ENABLE_FIREHOL_LEVEL1    Enable only Firehol level1 (overrides master when set)
+  ENABLE_FIREHOL_LEVEL2    Enable only Firehol level2 (overrides master when set)
+  ENABLE_FIREHOL_LEVEL3    Enable only Firehol level3 (overrides master when set)
   ENABLE_ABUSE_CH          Enable Abuse.ch feeds (default: true)
   ... and more (see README.md)
 

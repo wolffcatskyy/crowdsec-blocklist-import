@@ -268,6 +268,35 @@ class TestConfigFromEnv:
             cfg = Config.from_env()
         assert cfg.consolidate_alerts is False
 
+    def test_firehol_granular_levels_default_to_master(self, clean_env, monkeypatch):
+        """All three Firehol levels follow the master ENABLE_FIREHOL when unset."""
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_firehol is True
+        assert cfg.enable_firehol_level1 is True
+        assert cfg.enable_firehol_level2 is True
+        assert cfg.enable_firehol_level3 is True
+
+    def test_firehol_granular_level_override(self, clean_env, monkeypatch):
+        """A per-level flag overrides the master switch for that level only."""
+        clean_env.setenv("ENABLE_FIREHOL", "false")
+        clean_env.setenv("ENABLE_FIREHOL_LEVEL1", "true")
+        clean_env.setenv("ENABLE_FIREHOL_LEVEL3", "false")
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_firehol is False
+        assert cfg.enable_firehol_level1 is True   # explicit override on
+        assert cfg.enable_firehol_level2 is False  # falls back to master off
+        assert cfg.enable_firehol_level3 is False  # explicit override off
+
+    def test_firehol_master_off_disables_all_when_no_overrides(self, clean_env, monkeypatch):
+        clean_env.setenv("ENABLE_FIREHOL", "false")
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_firehol_level1 is False
+        assert cfg.enable_firehol_level2 is False
+        assert cfg.enable_firehol_level3 is False
+
     def test_abuseipdb_settings(self, clean_env):
         clean_env.setenv("ABUSEIPDB_API_KEY", "abc123")
         clean_env.setenv("ABUSEIPDB_MIN_CONFIDENCE", "75")

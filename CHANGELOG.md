@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ## [Unreleased]
 
+### Added
+
+- **Granular Firehol Level Control** — `ENABLE_FIREHOL` remains the master switch for all three Firehol levels, but you can now enable/disable individual levels with `ENABLE_FIREHOL_LEVEL1`, `ENABLE_FIREHOL_LEVEL2`, and `ENABLE_FIREHOL_LEVEL3`. Each level flag falls back to the master `ENABLE_FIREHOL` when unset, so existing configs are unchanged. Closes [#83](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/83)
+
 ---
 
 ## [3.7.0] — 2026-03-13
