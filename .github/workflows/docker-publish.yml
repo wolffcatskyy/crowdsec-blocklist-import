@@ -41,6 +41,16 @@ jobs:
           fi
           echo "Version check passed: tag=$TAG_VERSION, code=$CODE_VERSION"
 
+      - name: Compute release version tag
+        id: relver
+        if: github.event_name == 'release'
+        run: |
+          # Strip a leading "v" so the pinned image tag matches existing
+          # conventions (e.g. 3.7.1, not v3.7.1).
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -67,6 +77,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest,enable=${{ github.event_name == 'release' || github.ref_name == 'main' }}
+            # Deterministic pinned tag on release, independent of ref parsing.
+            # semver patterns above only populate when the run's ref is the tag;
+            # this guarantees the versioned tag lands on every release. (#89)
+            type=raw,value=${{ steps.relver.outputs.version }},enable=${{ github.event_name == 'release' }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -80,3 +94,24 @@ jobs:
             VERSION=${{ github.event_name == 'release' && github.event.release.tag_name || 'dev' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify pinned tag is published on registry
+        if: github.event_name == 'release'
+        run: |
+          # Guards against the silent gap in #89, where `latest` was current
+          # but the pinned version tag never made it to ghcr. Fail the release
+          # loudly instead of leaving users on a stale pinned image.
+          VERSION="${{ steps.relver.outputs.version }}"
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
+          echo "Verifying $IMAGE is present on the registry..."
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
+              echo "OK: $IMAGE is published."
+              exit 0
+            fi
+            echo "Attempt $attempt: $IMAGE not visible yet, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::Pinned tag $IMAGE was not found on the registry after publish."
+          echo "::error::The release did not produce a versioned image. Re-run this workflow for the release, or check the push step above."
+          exit 1
