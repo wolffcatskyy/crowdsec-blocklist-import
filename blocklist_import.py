@@ -16,7 +16,8 @@ Features:
 
 Authors:
 
-- @gaelj
+- @wolffcatskyy (original author & maintainer)
+- @gaelj (key contributor: BlocklistSource refactor, CI, reliability fixes)
 
 License: MIT
 """
