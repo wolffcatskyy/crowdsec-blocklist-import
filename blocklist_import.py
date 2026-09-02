@@ -2299,8 +2299,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
-    # Compute max-decisions budget (0 = unlimited)
-    max_new: int = 0  # 0 means unlimited
+    # Compute max-decisions budget (None = unlimited; 0 = nothing to import)
+    max_new: Optional[int] = None
     if config.max_decisions > 0:
         max_new = max(0, config.max_decisions - len(existing_ips_with_expiration_info))
         logger.info(
@@ -2440,7 +2440,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
         for ip in new_ips:
             # Enforce MAX_DECISIONS cap
-            if 0 < max_new <= total_accepted:
+            if max_new is not None and total_accepted >= max_new:
                 logger.info(
                     "MAX_DECISIONS budget exhausted — skipping remaining IPs"
                 )
@@ -2452,7 +2452,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
         for ip in refreshed_ips:
             # Enforce MAX_DECISIONS cap
-            if 0 < max_new <= total_accepted:
+            if max_new is not None and total_accepted >= max_new:
                 logger.info(
                     "MAX_DECISIONS budget exhausted — skipping remaining IPs"
                 )
@@ -2476,7 +2476,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         log_batch_stats(source_ok, source_failed, batch_cnt)
 
         # Stop processing more sources if budget exhausted
-        if 0 < max_new <= total_accepted:
+        if max_new is not None and total_accepted >= max_new:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
 

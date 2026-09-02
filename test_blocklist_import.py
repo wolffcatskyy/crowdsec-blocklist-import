@@ -2246,3 +2246,118 @@ class TestParsing:
 
     def test_large_value(self):
         assert parse_duration("999d") == timedelta(days=999)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for MAX_DECISIONS cap enforcement (issue #93)
+# ---------------------------------------------------------------------------
+
+class TestMaxDecisionsCap:
+    """MAX_DECISIONS must be enforced even when existing decisions already
+    meet or exceed the cap (and when CONSOLIDATE_ALERTS is enabled)."""
+
+    def _make_config(self, max_decisions: int, consolidate_alerts: bool = False) -> Config:
+        cfg = Config()
+        cfg.machine_id = "testmachine"
+        cfg.machine_password = "testpass"
+        cfg.dry_run = False
+        cfg.telemetry_enabled = False
+        cfg.metrics_enabled = False
+        cfg.heartbeat_interval = 0
+        cfg.max_decisions = max_decisions
+        cfg.consolidate_alerts = consolidate_alerts
+        cfg.custom_block_lists = ["https://example.com/test-blocklist.txt"]
+        return cfg
+
+    def _make_lapi(self, existing_ips: int) -> MagicMock:
+        lapi = MagicMock()
+        lapi.health_check.return_value = True
+        lapi.can_write.return_value = True
+        lapi.get_existing_ips.return_value = [
+            (f"10.0.0.{i}", timedelta(hours=24)) for i in range(1, existing_ips + 1)
+        ]
+        lapi.add_decisions.side_effect = lambda ips, **kw: (len(ips), 0)
+        return lapi
+
+    def _make_fetch_result(self, new_ips: int) -> FetchResult:
+        return FetchResult(
+            source=BlocklistSource(name="test", url="https://example.com/test-blocklist.txt"),
+            success=True,
+            new_unique_ip_count=new_ips,
+            refreshed_unique_ip_count=0,
+            duration=0.5,
+            error_type="",
+            error_exception=None,
+            parse_errors={},
+        )
+
+    def _patch_deps(self, lapi: MagicMock, new_ips: list[str]):
+        patchers = [
+            patch.object(bi, "create_http_session", return_value=MagicMock()),
+            patch.object(bi, "build_allowlist", return_value=MagicMock()),
+            patch.object(bi, "get_metrics", return_value=None),
+            patch.object(bi, "create_lapi_client_from_config", return_value=lapi),
+            patch.object(
+                bi,
+                "fetch_blocklist",
+                return_value=(new_ips, [], self._make_fetch_result(len(new_ips))),
+            ),
+            patch.object(bi, "send_telemetry"),
+            patch.object(bi, "send_webhook"),
+        ]
+        return patchers
+
+    def test_budget_exhausted_imports_nothing(self):
+        """Existing decisions >= MAX_DECISIONS: no new decisions imported,
+        even when the blocklist has fresh IPs."""
+        lapi = self._make_lapi(existing_ips=30000)
+        cfg = self._make_config(max_decisions=30000)
+        patchers = self._patch_deps(lapi, ["192.0.2.1", "192.0.2.2"])
+        for p in patchers:
+            p.start()
+        try:
+            logger = logging.getLogger("test_max_decisions")
+            stats = bi.run_import(cfg, logger)
+            assert stats.new_ips == 0
+            assert stats.imported_ok == 0
+            lapi.add_decisions.assert_not_called()
+        finally:
+            for p in patchers:
+                p.stop()
+
+    def test_budget_exhausted_consolidated_imports_nothing(self):
+        """CONSOLIDATE_ALERTS must not bypass the MAX_DECISIONS cap."""
+        lapi = self._make_lapi(existing_ips=30000)
+        cfg = self._make_config(max_decisions=30000, consolidate_alerts=True)
+        patchers = self._patch_deps(lapi, ["192.0.2.1", "192.0.2.2"])
+        for p in patchers:
+            p.start()
+        try:
+            logger = logging.getLogger("test_max_decisions_consolidated")
+            stats = bi.run_import(cfg, logger)
+            assert stats.new_ips == 0
+            assert stats.imported_ok == 0
+            lapi.add_decisions.assert_not_called()
+        finally:
+            for p in patchers:
+                p.stop()
+
+    def test_partial_budget_respected(self):
+        """When budget > 0, only the remaining budget is imported."""
+        lapi = self._make_lapi(existing_ips=29999)
+        cfg = self._make_config(max_decisions=30000)
+        new_ips = [f"192.0.2.{i}" for i in range(1, 11)]  # 10 fresh IPs, budget = 1
+        patchers = self._patch_deps(lapi, new_ips)
+        for p in patchers:
+            p.start()
+        try:
+            logger = logging.getLogger("test_partial_budget")
+            stats = bi.run_import(cfg, logger)
+            assert stats.new_ips == 1
+            assert stats.imported_ok == 1
+            lapi.add_decisions.assert_called_once()
+            sent = lapi.add_decisions.call_args.kwargs.get("ips") or lapi.add_decisions.call_args.args[0]
+            assert len(sent) == 1
+        finally:
+            for p in patchers:
+                p.stop()
