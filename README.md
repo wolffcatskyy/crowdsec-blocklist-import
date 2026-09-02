@@ -296,6 +296,17 @@ ENABLE_SCANNERS=false       # Shodan/Censys scanners
 
 See [Configuration Reference](docs/config-reference.md) for the full list of `ENABLE_*` variables.
 
+### Custom Blocklists
+
+Import any additional IP list via URL — e.g. cloud provider ranges, vendor-specific blocklists, or community feeds:
+
+```bash
+# Comma-separated list of URLs; each is fetched and imported like a built-in source
+CUSTOM_BLOCKLISTS="https://example.com/alibaba.txt,https://example.com/facebook.txt"
+```
+
+Each URL is added as its own source (`custom_blocklist_0`, `custom_blocklist_1`, ...) and goes through the same dedup, allowlist, and MAX_DECISIONS logic as the built-in feeds.
+
 ### Allowlists
 
 Protect trusted IPs from being blocked:
