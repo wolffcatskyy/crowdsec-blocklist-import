@@ -162,7 +162,11 @@ Controls Prometheus metrics and telemetry collection.
 
 ## Blocklist Toggle Switches
 
-Each blocklist source can be individually enabled or disabled. All blocklists default to `true` (enabled).
+Each blocklist source can be individually enabled or disabled. By default, blocklists remain enabled for backward compatibility. Set `BLOCKLISTS_OPT_IN=true` to make every unset `ENABLE_*` switch default to `false`; then enable only reviewed feeds explicitly. Explicit `ENABLE_*` values always take precedence.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| BLOCKLISTS_OPT_IN | Safe opt-in mode: unset blocklist switches default to disabled | `false` |
 
 | Variable | Description | Default |
 |----------|-------------|---------|

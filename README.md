@@ -288,7 +288,9 @@ Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier
 All blocklists are enabled by default. Disable feeds you don't need:
 
 ```bash
-ENABLE_IPSUM=true           # Aggregated threats (recommended)
+# Optional safe posture: disable every feed unless explicitly enabled below
+BLOCKLISTS_OPT_IN=true
+ENABLE_IPSUM=true           # Aggregated threats (review before enabling)
 ENABLE_SPAMHAUS=true        # Spamhaus DROP
 ENABLE_TOR=false            # Tor exit nodes (may cause false positives)
 ENABLE_SCANNERS=false       # Shodan/Censys scanners

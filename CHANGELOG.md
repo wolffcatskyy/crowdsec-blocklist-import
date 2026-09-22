@@ -5,6 +5,13 @@ All notable changes to crowdsec-blocklist-import are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
+## [3.8.0] — 2026-09-22
+
+### Added
+
+- **Opt-in Blocklist Mode** — Add `BLOCKLISTS_OPT_IN=true` so unset `ENABLE_*` switches default to disabled. Existing deployments remain unchanged when the flag is unset, and explicit per-feed choices always win. This provides a safer posture for installations behind shared infrastructure such as CDNs. Fixes #98.
+
+---
 ## [3.7.4] — 2026-09-22
 
 ### Fixed

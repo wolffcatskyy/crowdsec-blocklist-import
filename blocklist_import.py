@@ -57,7 +57,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.7.4"
+__version__ = "3.8.0"
 
 
 def get_lapi_user_agent() -> str:
@@ -614,10 +614,15 @@ class Config:
                 return None
             return val.lower() in ("true", "1", "yes", "on")
 
+        # BLOCKLISTS_OPT_IN changes only the default for feed switches. Explicit
+        # ENABLE_* values always win, preserving existing configurations.
+        blocklists_opt_in = get_bool("BLOCKLISTS_OPT_IN", False)
+        feed_default = not blocklists_opt_in
+
         # Firehol master switch + optional per-level overrides.
         # Each ENABLE_FIREHOL_LEVELn falls back to the master ENABLE_FIREHOL
         # when unset, preserving the original all-or-nothing behaviour.
-        firehol_master = get_bool("ENABLE_FIREHOL")
+        firehol_master = get_bool("ENABLE_FIREHOL", feed_default)
         fh_l1 = get_bool_or_none("ENABLE_FIREHOL_LEVEL1")
         fh_l2 = get_bool_or_none("ENABLE_FIREHOL_LEVEL2")
         fh_l3 = get_bool_or_none("ENABLE_FIREHOL_LEVEL3")
@@ -665,29 +670,29 @@ class Config:
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
             max_decisions=int(os.getenv("MAX_DECISIONS", "0")),
-            enable_ipsum=get_bool("ENABLE_IPSUM"),
-            enable_spamhaus=get_bool("ENABLE_SPAMHAUS"),
-            enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE"),
+            enable_ipsum=get_bool("ENABLE_IPSUM", feed_default),
+            enable_spamhaus=get_bool("ENABLE_SPAMHAUS", feed_default),
+            enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE", feed_default),
             enable_firehol=firehol_master,
             enable_firehol_level1=fh_l1 if fh_l1 is not None else firehol_master,
             enable_firehol_level2=fh_l2 if fh_l2 is not None else firehol_master,
             enable_firehol_level3=fh_l3 if fh_l3 is not None else firehol_master,
-            enable_abuse_ch=get_bool("ENABLE_ABUSE_CH"),
-            enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS"),
-            enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE"),
-            enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER"),
-            enable_dshield=get_bool("ENABLE_DSHIELD"),
-            enable_ci_army=get_bool("ENABLE_CI_ARMY"),
-            enable_botvrij=get_bool("ENABLE_BOTVRIJ"),
-            enable_greensnow=get_bool("ENABLE_GREENSNOW"),
-            enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM"),
-            enable_tor=get_bool("ENABLE_TOR"),
-            enable_scanners=get_bool("ENABLE_SCANNERS"),
-            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB"),
-            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER"),
+            enable_abuse_ch=get_bool("ENABLE_ABUSE_CH", feed_default),
+            enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS", feed_default),
+            enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE", feed_default),
+            enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER", feed_default),
+            enable_dshield=get_bool("ENABLE_DSHIELD", feed_default),
+            enable_ci_army=get_bool("ENABLE_CI_ARMY", feed_default),
+            enable_botvrij=get_bool("ENABLE_BOTVRIJ", feed_default),
+            enable_greensnow=get_bool("ENABLE_GREENSNOW", feed_default),
+            enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM", feed_default),
+            enable_tor=get_bool("ENABLE_TOR", feed_default),
+            enable_scanners=get_bool("ENABLE_SCANNERS", feed_default),
+            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default),
+            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default),
             enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2", False),
-            enable_vxvault=get_bool("ENABLE_VXVAULT"),
-            enable_sentinel=get_bool("ENABLE_SENTINEL")
+            enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default),
+            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default)
         )
 
 

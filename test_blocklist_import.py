@@ -214,6 +214,33 @@ class TestConfigFromEnv:
             cfg = Config.from_env()
             assert cfg.dry_run is False, f"DRY_RUN={val!r} should be False"
 
+    def test_blocklists_opt_in_disables_unset_sources(self, clean_env, monkeypatch):
+        """Opt-in mode leaves all unset feeds disabled."""
+        clean_env.setenv("BLOCKLISTS_OPT_IN", "true")
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_ipsum is False
+        assert cfg.enable_spamhaus is False
+        assert cfg.enable_firehol is False
+        assert cfg.enable_firehol_level1 is False
+        assert cfg.enable_sentinel is False
+
+    def test_blocklists_opt_in_explicit_enable_wins(self, clean_env, monkeypatch):
+        """A reviewed feed can be enabled explicitly in opt-in mode."""
+        clean_env.setenv("BLOCKLISTS_OPT_IN", "true")
+        clean_env.setenv("ENABLE_GREENSNOW", "true")
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_greensnow is True
+        assert cfg.enable_ipsum is False
+
+    def test_blocklists_opt_in_default_is_backward_compatible(self, clean_env, monkeypatch):
+        """Unset opt-in mode preserves the historical default-on posture."""
+        with patch("blocklist_import.load_dotenv", return_value=None):
+            cfg = Config.from_env()
+        assert cfg.enable_ipsum is True
+        assert cfg.enable_spamhaus is True
+
     def test_enable_source_disabled(self, clean_env):
         clean_env.setenv("ENABLE_IPSUM", "false")
         cfg = Config.from_env()
