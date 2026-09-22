@@ -349,7 +349,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # Maltrail mass scanners
     BlocklistSource(
         name="Maltrail scanners",
-        url="https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        url="https://raw.githubusercontent.com/stamparm/maltrail/master/data/mass_scanner.txt",
         enabled_key="enable_scanners",
     ),
     BlocklistSource(
