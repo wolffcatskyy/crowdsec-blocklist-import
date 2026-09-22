@@ -992,7 +992,7 @@ EOF
 
     # Maltrail mass scanners
     fetch_list "Maltrail scanners" \
-        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt" \
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/data/mass_scanner.txt" \
         "maltrail_scanner.txt" \
         "grep -v '^#' | awk '{print \$1}'"
 
