@@ -57,7 +57,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.7.3"
+__version__ = "3.7.4"
 
 
 def get_lapi_user_agent() -> str:

@@ -5,6 +5,13 @@ All notable changes to crowdsec-blocklist-import are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
+## [3.7.4] — 2026-09-22
+
+### Fixed
+
+- **Docker Release Trigger** — Build and publish the versioned container directly from version tags. Releases created by `GITHUB_TOKEN` do not emit a second `release` workflow event, so the previous pipeline could create a GitHub release without ever starting the Docker publish job.
+
+---
 ## [3.7.3] — 2026-09-22
 
 ### Fixed
