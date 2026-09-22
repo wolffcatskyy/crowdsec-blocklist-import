@@ -75,6 +75,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          gh release create "$TAG" \
-            --title "Release $TAG" \
-            --notes-file release_notes.txt
+          # A release may already exist when a maintainer publishes it before the
+          # tag-triggered workflow starts. Update it in that case so reruns and
+          # manual releases are idempotent instead of failing with "already_exists".
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "Release $TAG" \
+              --notes-file release_notes.txt
+          else
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --notes-file release_notes.txt
+          fi

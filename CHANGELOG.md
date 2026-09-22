@@ -5,6 +5,19 @@ All notable changes to crowdsec-blocklist-import are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
 ---
+## [3.7.3] — 2026-09-22
+
+### Fixed
+
+- **Release Pipeline** — Keep the application version in sync with release tags and make GitHub release creation idempotent when a release already exists. This prevents duplicate-release failures and lets the Docker release workflow publish versioned images.
+- **Maltrail Scanners Source URL** — Update the upstream source URL after the Maltrail repository moved the feed.
+- **MAX_DECISIONS Enforcement** — Enforce the configured cap even when existing decisions already exceed it.
+
+### Documentation
+
+- Document the `CUSTOM_BLOCKLISTS` environment variable.
+
+---
 ## [3.7.1] — 2026-03-25
 
 ### Fixed
