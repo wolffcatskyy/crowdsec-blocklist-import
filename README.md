@@ -3,7 +3,7 @@
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
 
-**Import 28+ threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
+**Import 31 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
 
 [![GitHub Stars](https://img.shields.io/github/stars/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/stargazers)
 [![CI](https://img.shields.io/github/actions/workflow/status/wolffcatskyy/crowdsec-blocklist-import/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/actions/workflows/ci.yml)
@@ -14,13 +14,13 @@
 [![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
 
 ```
-  Threat Feeds (28+)          crowdsec-blocklist-import           CrowdSec LAPI
+  Threat Feeds (31)           crowdsec-blocklist-import           CrowdSec LAPI
  ┌──────────────────┐        ┌────────────────────────┐        ┌──────────────┐
  │ IPsum            │───────>│  Fetch & Normalize     │        │              │
  │ Spamhaus DROP    │───────>│  Deduplicate vs LAPI   │───────>│  Decisions   │──> Bouncers
  │ Firehol L1/L2/L3 │───────>│  Batch Import          │        │  Database    │    (fw, CDN,
  │ Abuse.ch Feodo   │───────>│  Allowlist Filtering   │        │              │     nginx...)
- │ 24 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
+ │ 27 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
  └──────────────────┘        └────────────────────────┘
 ```
 
@@ -37,7 +37,7 @@ Most blocklist tools suffer from a critical flaw: **staleness**. They fetch bloc
 
 **crowdsec-blocklist-import solves this:**
 
-- **Fresh IPs propagate instantly** -- New threats from 28+ feeds hit your network within minutes, not days
+- **Fresh IPs propagate instantly** -- New threats from 31 feeds hit your network within minutes, not days
 - **Expired threats are removed immediately** -- Recovered IPs are automatically delisted, not held for weeks
 - **No cron delays** -- Run hourly or on-demand via built-in scheduler
 - **No stale drift** -- Every sync is a complete refresh; no orphaned entries linger
@@ -51,7 +51,7 @@ This is the difference between reactive security (waiting for alerts) and **acti
 - **Deduplication Engine** -- Detects IPs already in CrowdSec, eliminating redundant processing and API calls
 - **Normalization Layer** -- Strips comments, validates CIDR blocks, removes duplicates, enforces consistent formatting across all feeds
 - **Real-Time Sync** -- No caching, no delays. Every import is a complete refresh with live threat data
-- **28+ Threat Feeds** -- IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, Talos, Tor nodes, scanner IPs, and more
+- **31 Threat Feeds** -- IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, AbuseIPDB, StopForumSpam, Tor nodes, scanner IPs, and more
 - **Per-Feed Control** -- Enable or disable individual blocklists via environment variables
 - **Allowlist Support** -- Three-tier system: static IP lists, CIDR ranges, and provider-specific exceptions (GitHub IPs)
 - **Built-in Scheduler** -- Long-lived daemon mode with `INTERVAL=3600`. Graceful SIGTERM/SIGINT shutdown
@@ -325,7 +325,7 @@ ALLOWLIST_GITHUB=true
 
 ## Supported Blocklists
 
-crowdsec-blocklist-import pulls from 28+ threat intelligence sources:
+crowdsec-blocklist-import pulls from 31 threat intelligence sources:
 
 | Source | Purpose | Type |
 |--------|---------|------|
@@ -333,7 +333,7 @@ crowdsec-blocklist-import pulls from 28+ threat intelligence sources:
 | **Spamhaus DROP** | Known hijacked networks | Network blocks |
 | **Blocklist.de** | SSH, web, mail attacks (all categories) | Attack vectors |
 | **Firehol Level 1/2/3** | Malware, C2, compromised hosts | Malware |
-| **Abuse.ch** | Feodo (banking malware), SSL blacklist, URLhaus | Malware |
+| **Abuse.ch** | Feodo Tracker, URLhaus | Malware |
 | **Emerging Threats** | Compromised IP detection | Threats |
 | **Binary Defense** | Malware, DoS, botnet IPs | Malware |
 | **Bruteforce Blocker** | SSH/RDP brute force attacks | Attacks |
@@ -341,15 +341,15 @@ crowdsec-blocklist-import pulls from 28+ threat intelligence sources:
 | **CI Army** | Bad reputation hosts | Threats |
 | **AbuseIPDB** | Reported malicious IPs (public mirror; direct API optional) | Threats |
 | **Cybercrime Tracker** | Cybercrime infrastructure | Malware |
-| **Monty Security C2** | Command and control servers | Malware |
 | **VX Vault** | Malware hosting IPs | Malware |
 | **Botvrij** | Botnet C2 servers | Malware |
 | **GreenSnow** | Attacker IPs | Threats |
 | **StopForumSpam** | Forum spam sources | Spam |
+| **Sentinel** | Turris greylist (community-sourced threat intelligence) | Threats |
 | **Tor Exit Nodes** | Tor network exit points | Privacy |
 | **Scanner IPs** | Shodan, Censys, Internet scanners | Scanners |
 
-For a complete list with URLs and threat types, see [Examples](docs/examples.md).
+For a complete list with URLs and threat types, see [Examples](docs/examples.md). You can also generate a current machine-readable table with `python blocklist_import.py --list-sources --format md`.
 
 ---
 
@@ -369,6 +369,7 @@ Options:
   --duration DURATION       Override decision duration
   --batch-size SIZE         Override batch size
   --list-sources            List all available blocklist sources
+  --format FORMAT           Output format for --list-sources: text (default) or md
   --validate                Validate configuration and exit
   --pushgateway-url URL     Override Prometheus Pushgateway URL
   --no-metrics              Disable Prometheus metrics for this run
@@ -389,6 +390,9 @@ python blocklist_import.py --dry-run
 
 # List all available sources
 python blocklist_import.py --list-sources
+
+# Same list as a Markdown table, ready for docs
+python blocklist_import.py --list-sources --format md
 
 # Import with custom duration and batch size
 python blocklist_import.py --duration 48h --batch-size 500
@@ -673,4 +677,3 @@ MIT License -- See [LICENSE](LICENSE) for details.
 This is the official CrowdSec blocklist import tool maintained at [wolffcatskyy/crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import). If you downloaded this from another source or a different GitHub user, you may be using an impostor repository. Always verify you're using the official source.
 
 </details>
-
