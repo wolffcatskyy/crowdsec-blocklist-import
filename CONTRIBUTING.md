@@ -108,7 +108,7 @@ This is a **Python 3.9+ application** (`blocklist_import.py`, ~2000 lines):
   - Customizable batch sizes, timeouts, retry logic
 
 - **Blocklist Sources** (`BlocklistSource` dataclass, `BLOCKLIST_SOURCES` list)
-  - 31 public threat feeds (IPsum, Spamhaus, Firehol, etc.)
+  - 32 public threat feeds (IPsum, Spamhaus, Firehol, etc.)
   - Per-source configuration (URL, comment format, field extraction)
   - Environment variable control (`ENABLE_*` flags)
 
