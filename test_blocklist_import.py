@@ -2417,11 +2417,10 @@ class TestPresets:
     def test_server_disables_fp_prone_feeds(self, clean_env, monkeypatch):
         monkeypatch.setenv("PRESET", "server")
         cfg = Config.from_env()
-        # off: FP history (#26/#38), 30-day aggregate, Tor policy, dead upstream
+        # off: FP history (#26/#38), 30-day aggregate, Tor policy
         assert cfg.enable_firehol_level3 is False
         assert cfg.enable_vxvault is False
         assert cfg.enable_tor is False
-        assert cfg.enable_monty_security_c2 is False
         # the rest stays on
         assert cfg.enable_ipsum is True
         assert cfg.enable_blocklist_de is True
@@ -2434,8 +2433,6 @@ class TestPresets:
         assert cfg.enable_vxvault is True
         assert cfg.enable_tor is True
         assert cfg.enable_firehol_level3 is True
-        # dead upstream feed stays off even in max
-        assert cfg.enable_monty_security_c2 is False
 
     def test_explicit_enable_overrides_preset(self, clean_env, monkeypatch):
         monkeypatch.setenv("PRESET", "embedded")
@@ -2524,7 +2521,6 @@ class TestPresetHelpers:
         assert bi.presets_for_key("enable_spamhaus") == ["embedded", "server", "max"]
         assert bi.presets_for_key("enable_vxvault") == ["max"]
         assert bi.presets_for_key("enable_tor") == ["max"]
-        assert bi.presets_for_key("enable_monty_security_c2") == []
 
     def test_preset_feed_default_unknown_key(self):
         # unknown future feeds: conservative under embedded, on elsewhere
