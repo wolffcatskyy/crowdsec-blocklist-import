@@ -2484,6 +2484,41 @@ class TestPresets:
         assert cfg.enable_vxvault is True
 
 
+class TestPresetMaxDecisions:
+    """The embedded preset exists for the #21 crash, so it also caps
+    decisions by default; an explicit MAX_DECISIONS always wins."""
+
+    def test_embedded_caps_decisions_by_default(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        cfg = Config.from_env()
+        assert cfg.max_decisions == 15000
+
+    def test_explicit_max_decisions_overrides_embedded(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("MAX_DECISIONS", "8000")
+        cfg = Config.from_env()
+        assert cfg.max_decisions == 8000
+
+    def test_explicit_zero_means_unlimited_under_embedded(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("MAX_DECISIONS", "0")
+        cfg = Config.from_env()
+        assert cfg.max_decisions == 0
+
+    def test_empty_max_decisions_uses_preset_default(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("MAX_DECISIONS", "")
+        cfg = Config.from_env()
+        assert cfg.max_decisions == 15000
+
+    @pytest.mark.parametrize("preset", ["server", "max", ""])
+    def test_other_presets_stay_unlimited(self, clean_env, monkeypatch, preset):
+        if preset:
+            monkeypatch.setenv("PRESET", preset)
+        cfg = Config.from_env()
+        assert cfg.max_decisions == 0
+
+
 class TestPresetHelpers:
     def test_presets_for_key(self):
         assert bi.presets_for_key("enable_spamhaus") == ["embedded", "server", "max"]
