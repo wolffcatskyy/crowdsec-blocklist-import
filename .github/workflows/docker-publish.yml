@@ -88,14 +88,25 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # Pull requests run a native single-arch build loaded into the
+          # daemon so the image size can be reported below. Merges, tags
+          # and releases build and push the full multi-arch matrix.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.event_name == 'release' && github.event.release.tag_name || (startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Report image size
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "Image built by this PR (uncompressed size):"
+          docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' \
+            | grep -F "${REGISTRY}/${IMAGE_NAME}" || docker images | head -10
 
       - name: Verify pinned tag is published on registry
         if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
@@ -117,3 +128,4 @@ jobs:
           echo "::error::Pinned tag $IMAGE was not found on the registry after publish."
           echo "::error::The release did not produce a versioned image. Re-run this workflow for the release, or check the push step above."
           exit 1
+

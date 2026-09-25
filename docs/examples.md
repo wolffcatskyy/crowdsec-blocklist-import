@@ -463,7 +463,6 @@ networks:
 | `ENABLE_STAMPARM_IPSUM` | Stamparm IPsum |
 | `ENABLE_ABUSE_IPDB` | Abuse IPDB |
 | `ENABLE_CYBERCRIME_TRACKER` | Cybercrime Tracker |
-| `ENABLE_MONTY_SECURITY_C2` | Monty Security C2 |
 | `ENABLE_VXVAULT` | VX Vault |
 | `ENABLE_COINBLOCKER` | CoinBlocker |
 | `ENABLE_EMERGINGTHREATS` | Emerging Threats |

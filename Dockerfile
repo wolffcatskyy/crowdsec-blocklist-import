@@ -1,27 +1,25 @@
 # CrowdSec Blocklist Import - Python Edition
-# Multi-stage build for minimal image size
+# Multi-stage build for minimal image size (Alpine base)
 
-# Build stage (for any compilation needs)
-FROM python:3.11-slim AS builder
+# Build stage
+FROM python:3.11-alpine AS builder
 
 WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
+# Install Python dependencies.
+# Every runtime dependency ships a pure-Python wheel, so no compiler
+# toolchain is needed on Alpine. If a future dependency needs a native
+# build, add: apk add --no-cache gcc musl-dev
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 ARG VERSION=dev
 
@@ -35,8 +33,8 @@ LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Create non-root user for security
-RUN useradd -r -s /bin/false blocklist
+# Create non-root user for security (busybox adduser on Alpine)
+RUN adduser -D -H -s /sbin/nologin blocklist
 
 WORKDIR /app
 

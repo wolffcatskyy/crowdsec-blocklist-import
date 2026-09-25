@@ -1,0 +1,35 @@
+<Container version="2">
+  <Name>crowdsec-blocklist-import</Name>
+  <Repository>ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest</Repository>
+  <Registry>https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Icon>https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/icon.svg</Icon>
+  <Overview>Imports 28+ public threat-intelligence blocklists (IPsum, Spamhaus, Blocklist.de, Firehol, AbuseIPDB and more) into CrowdSec via LAPI, with deduplication, normalization and automatic refreshes.&#xA;&#xA;Runs as a self-scheduling daemon: INTERVAL (default 3600 seconds) controls how often feeds are refreshed, so no User Scripts cron job is required. Set INTERVAL=0 for a single one-shot run (the container then exits).&#xA;&#xA;Requires a reachable CrowdSec LAPI and a bouncer API key (create one on your CrowdSec host with: cscli bouncers add unraid-blocklist-import).</Overview>
+  <Project>https://github.com/wolffcatskyy/crowdsec-blocklist-import</Project>
+  <Support>https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues</Support>
+  <TemplateURL>https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/templates/crowdsec-blocklist-import.xml</TemplateURL>
+  <ReadMe>https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/README.md</ReadMe>
+  <Category>Security: Tools:System</Category>
+  <ExtraSearchTerms>crowdsec blocklist threat intelligence security firewall ipsum spamhaus abuseipdb</ExtraSearchTerms>
+  <Requires>A running CrowdSec instance with its Local API reachable from this container, plus a bouncer API key.</Requires>
+  <Changes>Initial Community Apps template. Tracks the latest multi-arch (amd64/arm64) image published from the source repository.</Changes>
+  <Date>2026-09-24</Date>
+  <MinVer>6.10</MinVer>
+  <License>MIT</License>
+  <Config Name="CrowdSec LAPI URL" Target="CROWDSEC_LAPI_URL" Default="http://crowdsec:8080" Description="URL of the CrowdSec Local API (scheme, host and port)." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="CrowdSec LAPI Key" Target="CROWDSEC_LAPI_KEY" Default="" Description="Bouncer API key from 'cscli bouncers add'." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Run interval (seconds)" Target="INTERVAL" Default="3600" Description="Seconds between import runs. 0 runs once and exits." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Decision duration" Target="DECISION_DURATION" Default="24h" Description="How long each imported ban lasts (e.g. 24h, 7d)." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Log level" Target="LOG_LEVEL" Default="INFO" Description="DEBUG, INFO, WARNING or ERROR." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Opt-in feeds only" Target="BLOCKLISTS_OPT_IN" Default="false" Description="true: every feed starts disabled and is enabled per feed with ENABLE_* variables." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="Allowlist" Target="ALLOWLIST" Default="" Description="Comma-separated IPs/CIDRs that are never banned." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="Custom blocklists" Target="CUSTOM_BLOCKLISTS" Default="" Description="Comma-separated additional blocklist URLs to import." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="Max decisions per run" Target="MAX_DECISIONS" Default="0" Description="Cap on decisions pushed per run. 0 = unlimited." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="Batch size" Target="BATCH_SIZE" Default="1000" Description="Decisions per LAPI batch (memory vs. speed)." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="AbuseIPDB API key" Target="ABUSEIPDB_API_KEY" Default="" Description="Optional: enables the AbuseIPDB feed." Type="Variable" Display="advanced-hide" Required="false" Mask="true"/>
+  <Config Name="Webhook URL" Target="WEBHOOK_URL" Default="" Description="Optional: Discord/Slack/generic run notifications." Type="Variable" Display="advanced-hide" Required="false" Mask="true"/>
+  <Config Name="Anonymous telemetry" Target="TELEMETRY_ENABLED" Default="true" Description="Anonymous usage ping; set false to disable." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+  <Config Name="Heartbeat interval" Target="CROWDSEC_HEARTBEAT_INTERVAL" Default="60" Description="Seconds between machine heartbeats to LAPI. 0 disables." Type="Variable" Display="advanced-hide" Required="false" Mask="false"/>
+</Container>

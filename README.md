@@ -3,7 +3,7 @@
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
 
-**Import 32 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
+**Import 31 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
 
 > [!WARNING]
 > **Defaults are changing in v4.0.0.** Today, with no configuration, every feed is enabled. v4.0.0 will switch the no-config fallback to `PRESET=server` (a conservative, high-confidence set). Set `PRESET=max` to keep the current behavior, or `PRESET=embedded` for UDM/UDR-class devices. v3.9 adds `PRESET=`, per-feed health metrics, `FAIL_ON_DEAD_FEED`, and per-feed license metadata in `--list-sources` - see the [changelog](CHANGELOG.md).
@@ -17,13 +17,13 @@
 [![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
 
 ```
-  Threat Feeds (32)           crowdsec-blocklist-import           CrowdSec LAPI
+  Threat Feeds (31)           crowdsec-blocklist-import           CrowdSec LAPI
  ┌──────────────────┐        ┌────────────────────────┐        ┌──────────────┐
  │ IPsum            │───────>│  Fetch & Normalize     │        │              │
  │ Spamhaus DROP    │───────>│  Deduplicate vs LAPI   │───────>│  Decisions   │──> Bouncers
  │ Firehol L1/L2/L3 │───────>│  Batch Import          │        │  Database    │    (fw, CDN,
  │ Abuse.ch Feodo   │───────>│  Allowlist Filtering   │        │              │     nginx...)
- │ 28 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
+ │ 27 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
  └──────────────────┘        └────────────────────────┘
 ```
 
@@ -40,7 +40,7 @@ Most blocklist tools suffer from a critical flaw: **staleness**. They fetch bloc
 
 **crowdsec-blocklist-import solves this:**
 
-- **Fresh IPs propagate instantly** -- New threats from 32 feeds hit your network within minutes, not days
+- **Fresh IPs propagate instantly** -- New threats from 31 feeds hit your network within minutes, not days
 - **Expired threats are removed immediately** -- Recovered IPs are automatically delisted, not held for weeks
 - **No cron delays** -- Run hourly or on-demand via built-in scheduler
 - **No stale drift** -- Every sync is a complete refresh; no orphaned entries linger
@@ -54,7 +54,7 @@ This is the difference between reactive security (waiting for alerts) and **acti
 - **Deduplication Engine** -- Detects IPs already in CrowdSec, eliminating redundant processing and API calls
 - **Normalization Layer** -- Strips comments, validates CIDR blocks, removes duplicates, enforces consistent formatting across all feeds
 - **Real-Time Sync** -- No caching, no delays. Every import is a complete refresh with live threat data
-- **32 Threat Feeds** -- IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, AbuseIPDB, StopForumSpam, Tor nodes, scanner IPs, and more
+- **31 Threat Feeds** -- IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, AbuseIPDB, StopForumSpam, Tor nodes, scanner IPs, and more
 - **Per-Feed Control** -- Enable or disable individual blocklists via environment variables
 - **Allowlist Support** -- Three-tier system: static IP lists, CIDR ranges, and provider-specific exceptions (GitHub IPs)
 - **Built-in Scheduler** -- Long-lived daemon mode with `INTERVAL=3600`. Graceful SIGTERM/SIGINT shutdown
@@ -346,7 +346,7 @@ ALLOWLIST_GITHUB=true
 
 ## Supported Blocklists
 
-crowdsec-blocklist-import pulls from 32 threat intelligence sources:
+crowdsec-blocklist-import pulls from 31 threat intelligence sources:
 
 | Source | Purpose | Type |
 |--------|---------|------|
@@ -362,7 +362,6 @@ crowdsec-blocklist-import pulls from 32 threat intelligence sources:
 | **CI Army** | Bad reputation hosts | Threats |
 | **AbuseIPDB** | Reported malicious IPs (public mirror; direct API optional) | Threats |
 | **Cybercrime Tracker** | Cybercrime infrastructure | Malware |
-| **Monty Security C2** | Command and control servers | Malware |
 | **VX Vault** | Malware hosting IPs | Malware |
 | **Botvrij** | Botnet C2 servers | Malware |
 | **GreenSnow** | Attacker IPs | Threats |
@@ -655,7 +654,7 @@ For more troubleshooting, see [FAQ](docs/faq.md).
 | **Dependencies** | `requests`, `python-dotenv` (+ optional `prometheus-client`) |
 | **Memory** | ~50-100 MB streaming processing (300k+ IPs) |
 | **Speed** | 500-1000 IPs/second depending on network and LAPI |
-| **Docker Image** | `ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest` (~150 MB) |
+| **Docker Image** | `ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest` (~85 MB) |
 | **Auth** | CrowdSec LAPI machine credentials (JWT) + bouncer key |
 
 ---

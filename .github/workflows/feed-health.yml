@@ -1,0 +1,58 @@
+name: Feed health
+
+# Weekly check that every feed URL in BLOCKLIST_SOURCES still answers.
+# Opens one issue per failing feed (label: feed-health), never duplicates,
+# and closes it when the feed recovers. Prevents repeats of #99, where the
+# Maltrail feed 404'd silently for days.
+
+on:
+  schedule:
+    - cron: '17 14 * * 1'   # Mondays 14:17 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/check_feeds.py'
+      - 'scripts/sync_feed_issues.py'
+      - '.github/workflows/feed-health.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feed-health
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check feed URLs
+        run: python scripts/check_feeds.py --output feed-health.json
+
+      - name: Open or close feed-health issues
+        # PR runs only validate the checker; issues are managed from main.
+        if: github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/sync_feed_issues.py feed-health.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feed-health
+          path: feed-health.json
