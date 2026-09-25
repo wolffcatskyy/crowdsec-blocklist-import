@@ -1,0 +1,15 @@
+<CommunityApplications>
+  <Profile>
+Unraid templates for [wolffcatskyy](https://github.com/wolffcatskyy)'s CrowdSec tooling.
+
+Currently shipping:
+
+- **crowdsec-blocklist-import** - import 28+ public threat-intelligence blocklists into CrowdSec via LAPI, with deduplication, normalization, and automatic refreshes. Runs as a self-scheduling daemon, so no User Scripts cron job is needed.
+
+Support: open an issue on the [source repository](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues).
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/icon.svg</Icon>
+  <WebPage>https://github.com/wolffcatskyy/crowdsec-blocklist-import</WebPage>
+  <DonateLink>https://github.com/sponsors/wolffcatskyy</DonateLink>
+  <DonateText>Support this project</DonateText>
+</CommunityApplications>
