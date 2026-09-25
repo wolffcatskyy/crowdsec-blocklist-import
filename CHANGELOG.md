@@ -10,9 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ### Added
 
 - **`--list-sources --format md`** — Print the source list as a Markdown table with a live feed count, so documentation can be regenerated instead of drifting.
+- **Live LAPI CI test** - New `live-lapi` job runs the importer against a real CrowdSec container in CI: it asserts structured scenarios round-trip byte-for-byte, that an IP listed by two feeds carries the higher confidence, that `CONSOLIDATE_ALERTS=true` stays per-feed, and that the LAPI has no online API credentials or console enrollment, so imported alerts cannot leak upstream as community signals.
 - **Structured scenario names with feed + confidence** - `SCENARIO_FORMAT=structured` writes `external/blocklist-import/<feed-slug>/c<0-100>` (e.g. `external/blocklist-import/spamhaus-drop/c95`) so downstream tools can rank imported IPs by feed quality. The crowdsec-unifi-bouncer sidecar uses it to drop low-confidence imports first when device capacity runs out. Per-feed defaults are built in; override with `FEED_CONFIDENCE="slug=NN,..."`, change the prefix with `SCENARIO_PREFIX`. Legacy `external/blocklist (Feed Name)` stays the default, so existing filters and dashboards are untouched. See [docs/scenario-format.md](docs/scenario-format.md).
 
 ### Fixed
+
+- **Multi-feed IPs get the highest confidence** - In structured mode, feeds are now processed highest-confidence first, so an IP listed by several feeds (e.g. Spamhaus DROP *and* Tor exits) is scored with the highest confidence among them instead of whichever feed happened to be processed first. Preset sources now also skip IPs that already hold a non-expiring decision (matching URL feeds), instead of re-writing them under the preset feed's scenario.
+- **Consolidation no longer cancels feed scoring** - `CONSOLIDATE_ALERTS=true` with `SCENARIO_FORMAT=structured` now sends one consolidated alert *per feed*, each carrying its own confidence, instead of a single mixed `all-sources` alert with none. Legacy-format consolidation is unchanged (single `all-sources` alert).
+- **Confidence defaults re-tiered**: Tor exits 40 -> 25, FireHOL level 1 90 -> 85, VXVault/StopForumSpam/FireHOL level 3 -> 35, Blocklist.de feeds -> 55-65, IPsum (level 3) 75 -> 65, URLhaus 75 -> 90 (abuse.ch curated). Full table and override instructions in [docs/scenario-format.md](docs/scenario-format.md). The numbers remain judgment calls, not measurements.
 
 - **Documentation consistency** — Feed count is now 32 everywhere (README, pyproject description, contributing guide), matching `--list-sources`. Previously the repo description said 36, the README said 28+, and older copy said 21+.
 - **Python version claims** — CONTRIBUTING, FAQ, and migration docs now say Python 3.9+, matching `requires-python` in `pyproject.toml`. They previously claimed 3.11+.
