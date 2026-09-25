@@ -8,7 +8,8 @@ Exit code is always 0 so the workflow can decide what to do with the
 report; use --strict to exit 1 when any feed fails.
 
 Feeds without a public URL (preset values) or that need an API key
-(AbuseIPDB API) are skipped.
+(AbuseIPDB API) are skipped, as are feeds hard-disabled in Config defaults
+(known-dead upstream, e.g. Monty Security C2, #80).
 """
 from __future__ import annotations
 
@@ -27,6 +28,13 @@ USER_AGENT = (f"crowdsec-blocklist-import-feed-health/{bi.__version__} "
               "(+https://github.com/wolffcatskyy/crowdsec-blocklist-import)")
 TIMEOUT = 30
 ATTEMPTS = 3
+
+
+def disabled_in_code(source) -> bool:
+    """True for feeds hard-disabled in Config defaults (known-dead upstream, e.g. Monty C2 / #80)."""
+    key = source.enabled_key or ""
+    fields = getattr(bi.Config, "__dataclass_fields__", {})
+    return key in fields and fields[key].default is False
 
 
 def needs_api_key(source) -> bool:
@@ -73,6 +81,9 @@ def main() -> int:
             continue
         if needs_api_key(source):
             print(f"SKIP  {source.name} (requires API key)")
+            continue
+        if disabled_in_code(source):
+            print(f"SKIP  {source.name} (disabled by default in code)")
             continue
         if source.url in seen:
             continue
