@@ -64,7 +64,7 @@ can also override per feed in its own config (`feed_scoring.feeds`).
 | 95 | spamhaus-drop, feodo-tracker |
 | 90 | abuseipdb, abuseipdb-api, urlhaus |
 | 85 | firehol-level1, ipsum-level4, emerging-threats, dshield |
-| 80 | cybercrime-tracker, monty-security-c2, dshield-top-attackers |
+| 80 | cybercrime-tracker, dshield-top-attackers |
 | 75 | binary-defense, ci-army, firehol-level2 |
 | 70 | botvrij |
 | 65 | blocklist-de-ssh, ipsum, greensnow, sentinel, bruteforce-blocker |
