@@ -2531,6 +2531,70 @@ class TestPresetHelpers:
 
 
 # ===========================================================================
+# 13b. Data-Shield IPv4: explicit opt-in feed (discussion #76)
+# ===========================================================================
+
+
+class TestDataShieldOptIn:
+    """Data-Shield IPv4 is disabled by default everywhere; only an explicit
+    ENABLE_DATA_SHIELD=true turns it on."""
+
+    def test_source_registered(self):
+        matches = [s for s in bi.BLOCKLIST_SOURCES if s.name == "Data-Shield IPv4"]
+        assert len(matches) == 1
+        src = matches[0]
+        assert src.enabled_key == "enable_data_shield"
+        assert src.url == (
+            "https://raw.githubusercontent.com/duggytuxy/"
+            "Data-Shield_IPv4_Blocklist/main/prod_data-shield_ipv4_blocklist.txt"
+        )
+        assert src.license == "GPL-3.0-only"
+        assert "ENABLE_DATA_SHIELD" in VALID_ENABLE_VARS
+
+    def test_off_under_legacy_default(self, clean_env):
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is False
+
+    def test_off_under_opt_in_mode(self, clean_env, monkeypatch):
+        monkeypatch.setenv("BLOCKLISTS_OPT_IN", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is False
+
+    @pytest.mark.parametrize("preset", ["embedded", "server", "max"])
+    def test_off_under_every_preset(self, clean_env, monkeypatch, preset):
+        monkeypatch.setenv("PRESET", preset)
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is False
+
+    def test_explicit_enable_turns_on_legacy(self, clean_env, monkeypatch):
+        monkeypatch.setenv("ENABLE_DATA_SHIELD", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is True
+
+    def test_explicit_enable_turns_on_under_preset(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("ENABLE_DATA_SHIELD", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is True
+
+    def test_explicit_false_stays_off_under_max(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "max")
+        monkeypatch.setenv("ENABLE_DATA_SHIELD", "false")
+        cfg = Config.from_env()
+        assert cfg.enable_data_shield is False
+
+    def test_no_preset_membership(self):
+        assert bi.presets_for_key("enable_data_shield") == []
+
+    def test_confidence_default(self):
+        assert bi.feed_slug("Data-Shield IPv4") == "data-shield-ipv4"
+        assert bi.feed_confidence("Data-Shield IPv4") == 65
+        assert bi.feed_confidence(
+            "Data-Shield IPv4", {"data-shield-ipv4": 80}
+        ) == 80
+
+
+# ===========================================================================
 # 14. Opt-in deprecation warning (v3.9, ahead of the v4.0 defaults flip)
 # ===========================================================================
 
