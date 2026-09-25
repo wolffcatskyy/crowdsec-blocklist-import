@@ -1,0 +1,28 @@
+{{- if eq .Values.mode "cronjob" }}
+crowdsec-blocklist-import installed as a CronJob.
+
+  Schedule:  {{ .Values.cronjob.schedule }} ({{ .Values.cronjob.concurrencyPolicy }})
+  Namespace: {{ .Release.Namespace }}
+
+Trigger an import immediately:
+
+  kubectl create job --from=cronjob/{{ include "crowdsec-blocklist-import.fullname" . }} {{ include "crowdsec-blocklist-import.fullname" . }}-manual -n {{ .Release.Namespace }}
+
+Watch the logs:
+
+  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ .Release.Namespace }} --tail=100
+{{- else }}
+crowdsec-blocklist-import installed as a Deployment (daemon mode).
+
+  Interval:  every {{ .Values.config.interval }}s
+  Namespace: {{ .Release.Namespace }}
+
+Watch the logs:
+
+  kubectl logs deploy/{{ include "crowdsec-blocklist-import.fullname" . }} -n {{ .Release.Namespace }} -f
+{{- end }}
+
+LAPI target: {{ .Values.config.crowdsecLapiUrl }}
+{{- if .Values.existingSecret }}
+Using existing Secret "{{ .Values.existingSecret }}" for CROWDSEC_LAPI_KEY.
+{{- end }}
