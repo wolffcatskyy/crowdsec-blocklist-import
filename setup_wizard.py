@@ -33,6 +33,7 @@ GROUP_META = {
     "ENABLE_CYBERCRIME_TRACKER":("Cybercrime Tracker", "C2 IPs from cybercrime tracker"),
     "ENABLE_VXVAULT":           ("VXVault",            "Malware hosting IPs"),
     "ENABLE_SENTINEL":          ("Sentinel",           "Turris Sentinel greylist"),
+    "ENABLE_DATA_SHIELD":       ("Data-Shield IPv4",   "duggytuxy curated IPv4 blocklist (opt-in, default off)"),
 }
 
 # Ordered list used for display (matches VALID_ENABLE_VARS ordering)
@@ -42,7 +43,7 @@ ORDERED_ENABLE_KEYS = [
     "ENABLE_BRUTEFORCE_BLOCKER", "ENABLE_DSHIELD", "ENABLE_CI_ARMY", "ENABLE_BOTVRIJ",
     "ENABLE_GREENSNOW", "ENABLE_STOPFORUMSPAM", "ENABLE_TOR", "ENABLE_SCANNERS",
     "ENABLE_ABUSE_IPDB", "ENABLE_CYBERCRIME_TRACKER",
-    "ENABLE_VXVAULT", "ENABLE_SENTINEL",
+    "ENABLE_VXVAULT", "ENABLE_SENTINEL", "ENABLE_DATA_SHIELD",
 ]
 
 # Presets
@@ -154,9 +155,15 @@ def prompt_input(prompt, default="", secret=False):
         raise KeyboardInterrupt
 
 
+# Opt-in feeds that start OFF in the wizard (matching blocklist_import's
+# _OPT_IN_FEEDS: only an explicit choice turns them on).
+OPT_IN_DEFAULT_OFF = {"ENABLE_DATA_SHIELD"}
+
+
 def _is_enabled(state, key):
-    """Return True if the ENABLE_* key is on (default True)."""
-    val = state.get(key, "true").lower()
+    """Return True if the ENABLE_* key is on (default True, except opt-in feeds)."""
+    default = "false" if key in OPT_IN_DEFAULT_OFF else "true"
+    val = state.get(key, default).lower()
     return val in ("true", "1", "yes", "on")
 
 
