@@ -39,6 +39,104 @@ jobs:
         run: |
           flake8 blocklist_import.py --max-line-length 120 --ignore E501,W503
 
+  live-lapi:
+    name: Live LAPI round-trip (structured scenarios)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start CrowdSec LAPI (no upstream API, no console enrollment)
+        run: |
+          docker run -d --name crowdsec -p 8080:8080 \
+            -e DISABLE_ONLINE_API=true \
+            crowdsecurity/crowdsec:latest
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/decisions || true)
+            if [ "$code" != "000" ]; then echo "LAPI up (HTTP $code)"; break; fi
+            sleep 2
+          done
+          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass -f
+          docker exec crowdsec cscli machines validate ci-importer || true
+
+      - name: Serve test feeds
+        run: |
+          python3 -m http.server 8899 --directory tests/fixtures &
+          sleep 1
+          curl -sf http://localhost:8899/feed-low.txt
+          curl -sf http://localhost:8899/feed-high.txt
+
+      - name: Run importer against the live LAPI (structured, per-feed alerts)
+        env:
+          CROWDSEC_LAPI_URL: http://localhost:8080
+          CROWDSEC_MACHINE_ID: ci-importer
+          CROWDSEC_MACHINE_PASSWORD: ci-importer-pass
+          SCENARIO_FORMAT: structured
+          BLOCKLISTS_OPT_IN: "true"
+          CUSTOM_BLOCKLISTS: http://localhost:8899/feed-low.txt,http://localhost:8899/feed-high.txt
+          FEED_CONFIDENCE: custom-blocklist-0=30,custom-blocklist-1=95
+          TELEMETRY_ENABLED: "false"
+          METRICS_ENABLED: "false"
+          CROWDSEC_HEARTBEAT_INTERVAL: "0"
+        run: python3 blocklist_import.py
+
+      - name: Assert scenarios round-trip byte-for-byte and multi-feed IPs get the highest confidence
+        run: |
+          docker exec crowdsec cscli decisions list -o json > decisions.json
+          python3 tests/assert_live_lapi.py decisions.json
+
+      - name: Restart with a fresh LAPI for the consolidation run
+        run: |
+          docker rm -f crowdsec
+          docker run -d --name crowdsec -p 8080:8080 \
+            -e DISABLE_ONLINE_API=true \
+            crowdsecurity/crowdsec:latest
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/decisions || true)
+            if [ "$code" != "000" ]; then echo "LAPI up (HTTP $code)"; break; fi
+            sleep 2
+          done
+          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass -f
+          docker exec crowdsec cscli machines validate ci-importer || true
+
+      - name: Run importer with CONSOLIDATE_ALERTS=true
+        env:
+          CROWDSEC_LAPI_URL: http://localhost:8080
+          CROWDSEC_MACHINE_ID: ci-importer
+          CROWDSEC_MACHINE_PASSWORD: ci-importer-pass
+          SCENARIO_FORMAT: structured
+          CONSOLIDATE_ALERTS: "true"
+          BLOCKLISTS_OPT_IN: "true"
+          CUSTOM_BLOCKLISTS: http://localhost:8899/feed-low.txt,http://localhost:8899/feed-high.txt
+          FEED_CONFIDENCE: custom-blocklist-0=30,custom-blocklist-1=95
+          TELEMETRY_ENABLED: "false"
+          METRICS_ENABLED: "false"
+          CROWDSEC_HEARTBEAT_INTERVAL: "0"
+        run: python3 blocklist_import.py
+
+      - name: Assert consolidation stays per-feed (no all-sources)
+        run: |
+          docker exec crowdsec cscli alerts list -o json > alerts.json
+          python3 tests/assert_live_lapi.py alerts.json --consolidated
+
+      - name: Assert imported alerts cannot leak upstream as community signals
+        run: |
+          # The instance has no online API credentials and is not enrolled in
+          # the console, so nothing can be shared upstream. Decisions are
+          # pushed with origin "blocklist-import" (asserted above), not a hub
+          # scenario.
+          docker exec crowdsec test ! -f /etc/crowdsec/online_api_credentials.yaml
+          docker exec crowdsec cscli console status || true
+
   release:
     name: Create GitHub Release
     needs: test
