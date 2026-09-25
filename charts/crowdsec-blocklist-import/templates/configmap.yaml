@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crowdsec-blocklist-import.fullname" . }}
+  labels:
+    {{- include "crowdsec-blocklist-import.labels" . | nindent 4 }}
+data:
+  CROWDSEC_LAPI_URL: {{ .Values.config.crowdsecLapiUrl | quote }}
+  CROWDSEC_HEARTBEAT_INTERVAL: {{ .Values.config.crowdsecHeartbeatInterval | quote }}
+  DECISION_DURATION: {{ .Values.config.decisionDuration | quote }}
+  DECISION_REASON: {{ .Values.config.decisionReason | quote }}
+  DECISION_TYPE: {{ .Values.config.decisionType | quote }}
+  DECISION_ORIGIN: {{ .Values.config.decisionOrigin | quote }}
+  DECISION_SCENARIO: {{ .Values.config.decisionScenario | quote }}
+  BATCH_SIZE: {{ .Values.config.batchSize | quote }}
+  FETCH_TIMEOUT: {{ .Values.config.fetchTimeout | quote }}
+  MAX_RETRIES: {{ .Values.config.maxRetries | quote }}
+  MAX_DECISIONS: {{ .Values.config.maxDecisions | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  REFRESH_PERIOD_FREQUENT_MN: {{ .Values.config.refreshPeriodFrequentMn | quote }}
+  REFRESH_PERIOD_LIMITED_MN: {{ .Values.config.refreshPeriodLimitedMn | quote }}
+  TELEMETRY_ENABLED: {{ .Values.config.telemetryEnabled | quote }}
+  ABUSEIPDB_MIN_CONFIDENCE: {{ .Values.config.abuseipdbMinConfidence | quote }}
+  ABUSEIPDB_LIMIT: {{ .Values.config.abuseipdbLimit | quote }}
+  {{- with .Values.config.allowlist }}
+  ALLOWLIST: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.customBlocklists }}
+  CUSTOM_BLOCKLISTS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.metricsPushgatewayUrl }}
+  METRICS_PUSHGATEWAY_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.webhookType }}
+  WEBHOOK_TYPE: {{ . | quote }}
+  {{- end }}
+  {{- range $key, $value := .Values.feedFlags }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
