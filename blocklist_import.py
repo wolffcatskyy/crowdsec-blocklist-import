@@ -423,7 +423,6 @@ FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
     "emerging-threats": 85,
     "dshield": 85,
     "cybercrime-tracker": 80,
-    "monty-security-c2": 80,
     "dshield-top-attackers": 80,
     "binary-defense": 75,
     "ci-army": 75,
