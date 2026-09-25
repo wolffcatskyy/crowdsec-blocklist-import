@@ -36,8 +36,11 @@ def main() -> int:
         print(f"OK: consolidated alerts are per-feed: {sorted(scenarios)}")
         return 0
 
+    # `cscli decisions list -o json` returns alerts, each with a nested
+    # "decisions" list; flatten to one entry per decision.
+    decisions = [d for alert in data for d in (alert.get("decisions") or [])]
     got = {}
-    for d in data:
+    for d in decisions:
         ip, scenario = d.get("value"), d.get("scenario")
         assert d.get("origin") == "blocklist-import", d
         assert ip not in got, f"duplicate decision for {ip}: {got[ip]} and {scenario}"
