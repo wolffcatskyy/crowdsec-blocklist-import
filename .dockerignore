@@ -1,0 +1,17 @@
+# VCS and CI metadata
+.git
+.github/
+
+# Packaging assets that do not belong in the image
+charts/
+templates/
+ca_profile.xml
+icon.svg
+
+# Docs and tests
+*.md
+test_blocklist_import.py
+
+# Local environment files
+.env
+.env.*
