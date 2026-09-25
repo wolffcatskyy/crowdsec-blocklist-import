@@ -571,6 +571,138 @@ def presets_for_key(enabled_key: str) -> list[str]:
 
 
 # =============================================================================
+# Feed provenance in scenario names (SCENARIO_FORMAT=structured)
+# =============================================================================
+#
+# Structured scenario grammar, consumed by the crowdsec-unifi-bouncer sidecar:
+#
+#     <SCENARIO_PREFIX>/<feed-slug>/c<confidence>
+#     e.g. external/blocklist-import/spamhaus-drop/c95
+#
+# feed-slug:  lowercase ASCII letters/digits joined by single hyphens
+#             (see feed_slug()).
+# confidence: integer 0-100, how likely an entry from the feed is a real,
+#             current threat (low = more false-positive risk).
+# Consolidated alerts (CONSOLIDATE_ALERTS=true) are sent per feed in
+# structured mode, so each keeps its per-feed confidence. Only the legacy
+# format uses a single mixed <prefix>/all-sources alert with no confidence.
+#
+# The legacy format "<DECISION_SCENARIO> (<Feed Name>)" stays the default so
+# existing filters, dashboards and cscli queries keep working.
+
+SCENARIO_FORMATS = ("legacy", "structured")
+DEFAULT_SCENARIO_PREFIX = "external/blocklist-import"
+DEFAULT_FEED_CONFIDENCE = 50
+
+# Default confidence per feed slug. Starting points based on how each list is
+# built (curated/verified vs. automated honeypot reports vs. non-malicious
+# categories like Tor exits and research scanners). Override with
+# FEED_CONFIDENCE="slug=NN,slug=NN".
+FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
+    # 90-95: curated, few false positives (hijacked/criminal netblocks,
+    # confirmed C2, abuse.ch curated lists)
+    "spamhaus-drop": 95,
+    "feodo-tracker": 95,
+    "abuseipdb": 90,
+    "abuseipdb-api": 90,
+    "urlhaus": 90,
+    # 70-85: high-signal attack/C2 reports (ET compromised, FireHOL level 1,
+    # CINS, DShield top attackers) and consensus lists (IPsum level 4+)
+    "firehol-level1": 85,
+    "ipsum-level4": 85,
+    "emerging-threats": 85,
+    "dshield": 85,
+    "cybercrime-tracker": 80,
+    "dshield-top-attackers": 80,
+    "binary-defense": 75,
+    "ci-army": 75,
+    "firehol-level2": 75,
+    "botvrij": 70,
+    # 50-65: broad automated attack reports (Blocklist.de, IPsum at lower
+    # levels) and non-malicious scanner lists
+    "blocklist-de-ssh": 65,
+    "ipsum": 65,
+    "greensnow": 65,
+    "sentinel": 65,
+    "bruteforce-blocker": 65,
+    "blocklist-de-all": 60,
+    "blocklist-de-apache": 55,
+    "blocklist-de-mail": 55,
+    "shodan-scanners": 50,
+    "maltrail-scanners": 50,
+    "static-scanner-ips-censys": 50,
+    # 20-40: noisier aggregated lists (FireHOL level 3/4, StopForumSpam,
+    # VXVault) and anonymity networks (Tor exits are not malicious per se)
+    "vxvault": 35,
+    "firehol-level3": 35,
+    "stopforumspam": 35,
+    "tor-exit-nodes": 25,
+    "tor-dan-me-uk": 25,
+}
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_VALID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def feed_slug(name: str) -> str:
+    """Normalize a feed name to a scenario-safe slug.
+
+    "Spamhaus DROP" -> "spamhaus-drop", "Tor (dan.me.uk)" -> "tor-dan-me-uk".
+    Must stay in sync with feed.Slugify in crowdsec-unifi-bouncer's sidecar.
+    """
+    return _SLUG_RE.sub("-", name.lower()).strip("-")
+
+
+def parse_feed_confidence(raw: str, logger: Optional[logging.Logger] = None) -> dict[str, int]:
+    """Parse FEED_CONFIDENCE ("slug=NN,Feed Name=NN") into {slug: confidence}.
+
+    Keys may be slugs or human feed names; values are clamped to 0-100.
+    Malformed entries are skipped with a warning.
+    """
+    result: dict[str, int] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, value = part.rpartition("=")
+        slug = feed_slug(key)
+        try:
+            conf = int(value.strip())
+        except ValueError:
+            conf = None
+        if not sep or not slug or conf is None:
+            if logger:
+                logger.warning(f"FEED_CONFIDENCE: ignoring malformed entry {part!r} (expected slug=0-100)")
+            continue
+        result[slug] = max(0, min(100, conf))
+    return result
+
+
+def feed_confidence(source_name: str, overrides: Optional[dict[str, int]] = None) -> int:
+    """Return the confidence (0-100) for a feed, applying overrides first."""
+    slug = feed_slug(source_name)
+    if overrides and slug in overrides:
+        return overrides[slug]
+    return FEED_CONFIDENCE_DEFAULTS.get(slug, DEFAULT_FEED_CONFIDENCE)
+
+
+def build_scenario(config: "Config", source_name: Optional[str]) -> str:
+    """Build the decision/alert scenario name for a feed.
+
+    source_name=None means a consolidated alert covering all sources
+    (legacy format only; structured mode consolidates per feed instead).
+    """
+    if config.scenario_format == "structured":
+        prefix = config.scenario_prefix.rstrip("/")
+        if source_name is None:
+            return f"{prefix}/all-sources"
+        conf = feed_confidence(source_name, config.feed_confidence)
+        return f"{prefix}/{feed_slug(source_name)}/c{conf}"
+    label = "all sources" if source_name is None else source_name
+    return f"{config.decision_scenario} ({label})"
+
+
+# =============================================================================
 # Environment Variable Validation
 # =============================================================================
 
@@ -729,6 +861,9 @@ class Config:
     decision_type: str = "ban"
     decision_origin: str = "blocklist-import"
     decision_scenario: str = "external/blocklist"
+    scenario_format: str = "legacy"  # "legacy" or "structured"
+    scenario_prefix: str = DEFAULT_SCENARIO_PREFIX
+    feed_confidence: Optional[dict[str, int]] = None  # slug -> 0-100 overrides
 
     # Processing settings
     allow_list: Optional[list[str]] = None
@@ -872,6 +1007,15 @@ class Config:
         else:
             max_decisions = preset_max_decisions_default(preset)
 
+        scenario_format = os.getenv("SCENARIO_FORMAT", "legacy").strip().lower()
+        if scenario_format not in SCENARIO_FORMATS:
+            logging.getLogger("blocklist-import").warning(
+                f"SCENARIO_FORMAT={scenario_format!r} is not one of {', '.join(SCENARIO_FORMATS)}; using legacy"
+            )
+            scenario_format = "legacy"
+        scenario_prefix = os.getenv("SCENARIO_PREFIX", DEFAULT_SCENARIO_PREFIX).strip().rstrip("/") \
+            or DEFAULT_SCENARIO_PREFIX
+
         return cls(
             lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
             lapi_key=os.getenv("CROWDSEC_LAPI_KEY", ""),
@@ -889,6 +1033,11 @@ class Config:
             decision_type=os.getenv("DECISION_TYPE", "ban"),
             decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
             decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
+            scenario_format=scenario_format,
+            scenario_prefix=scenario_prefix,
+            feed_confidence=parse_feed_confidence(
+                os.getenv("FEED_CONFIDENCE", ""), logging.getLogger("blocklist-import")
+            ),
             allow_list=[x.strip() for x in os.getenv("ALLOWLIST", "").split(",") if x.strip()],
             allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
             custom_block_lists=[x.strip() for x in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if x.strip()],
@@ -2579,6 +2728,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     logger.info(f"LAPI URL: {config.lapi_url}")
     logger.info(f"Machine ID: {config.machine_id}")
     logger.info(f"Mode: {config.mode}")
+    if config.scenario_format == "structured":
+        logger.info(f"Scenario format: structured ({config.scenario_prefix}/<feed>/c<confidence>)")
+        if config.consolidate_alerts:
+            logger.info("CONSOLIDATE_ALERTS is on: one consolidated alert per feed, "
+                        "each keeping its per-feed confidence")
 
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
@@ -2684,6 +2838,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         stats.duration_seconds = time.time() - start_time
         return stats
 
+    if config.scenario_format == "structured":
+        # Highest-confidence feeds first. Deduplication keeps the first feed
+        # that claims an IP, so processing order decides the scenario an IP
+        # listed by several feeds gets. Sorting makes that deterministic:
+        # the IP always gets the highest confidence among the feeds listing
+        # it. Stable sort keeps the definition order within equal confidence.
+        enabled_sources.sort(
+            key=lambda s: feed_confidence(s.name, config.feed_confidence),
+            reverse=True,
+        )
+
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
     # Compute max-decisions budget (None = unlimited; 0 = nothing to import)
@@ -2700,11 +2865,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     # Process blocklists and batch import
     batch: list[str] = []
-    # When consolidate_alerts is enabled, defer all IPs for a single alert at end of run
+    # When consolidate_alerts is enabled, defer IPs for alert(s) at end of run.
+    # Legacy format: one mixed alert for all sources. Structured format: one
+    # alert per feed, so per-feed confidence survives consolidation.
     deferred_ips: list[str] = []
+    deferred_by_source: dict[str, list[str]] = {}
 
     if config.consolidate_alerts:
-        logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
+        if config.scenario_format == "structured":
+            logger.info("Alert consolidation enabled — one consolidated alert per feed")
+        else:
+            logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
 
     def log_batch_stats(ok: int, failed: int, batch_cnt: int):
         if ok > 0:
@@ -2719,9 +2890,12 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             return 0, 0
 
         if config.consolidate_alerts:
-            # Defer IPs for a single consolidated alert at end of run
+            # Defer IPs for consolidated alert(s) at end of run
             count = len(batch)
-            deferred_ips.extend(batch)
+            if config.scenario_format == "structured":
+                deferred_by_source.setdefault(source_name, []).extend(batch)
+            else:
+                deferred_ips.extend(batch)
             batch = []
             return count, 0
 
@@ -2736,7 +2910,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 reason=f"{config.decision_reason} ({source_name})",
                 decision_type=config.decision_type,
                 origin=config.decision_origin,
-                scenario=f"{config.decision_scenario} ({source_name})",
+                scenario=build_scenario(config, source_name),
             )
             stats.imported_ok += ok
             stats.imported_failed += failed
@@ -2767,15 +2941,24 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if source.preset_values:
             logger.debug(f"Adding {source.name} ({len(source.preset_values)} preset IPs)")
             t0 = time.time()
-            # Deduplicate preset values against seen_ips (same as fetch_blocklist path)
+            # Deduplicate preset values against seen_ips (same as fetch_blocklist path):
+            # skip IPs that already hold a non-expiring decision, refresh only
+            # ones expiring soon. A preset IP already claimed by an earlier
+            # (higher-confidence, in structured mode) feed keeps that feed's
+            # scenario instead of being re-written under this one.
             new_ips = []
             refreshed_ips = []
+            non_expiring_preset_seen = set(non_expiring_known_ips)
+            expiring_preset_known = set(expiring_known_ips_list)
             for ip in source.preset_values:
-                if ip not in [_ip for _ip, _ in seen_ips]:
-                    seen_ips.add((ip, timedelta(days=1)))
-                    new_ips.append(ip)
-                else:
+                if ip in non_expiring_preset_seen:
+                    continue
+                non_expiring_preset_seen.add(ip)
+                seen_ips.add((ip, timedelta(days=1)))
+                if ip in expiring_preset_known:
                     refreshed_ips.append(ip)
+                else:
+                    new_ips.append(ip)
             result = FetchResult(
                 source=source,
                 success=True,
@@ -2871,8 +3054,41 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
 
-    # Flush consolidated alert (single alert for all sources)
-    if config.consolidate_alerts and deferred_ips:
+    # Flush consolidated alerts (structured format: one alert per feed, so
+    # each keeps its per-feed confidence)
+    if config.consolidate_alerts and config.scenario_format == "structured" and deferred_by_source:
+        total_deferred = sum(len(ips) for ips in deferred_by_source.values())
+        logger.info(
+            f"Sending {len(deferred_by_source)} consolidated alerts "
+            f"({total_deferred} IPs, one per feed)"
+        )
+        for source_name, source_ips in deferred_by_source.items():
+            if config.dry_run:
+                logger.debug(f"DRY RUN: Would import {len(source_ips)} IPs in consolidated alert for {source_name}")
+                stats.imported_ok += len(source_ips)
+                continue
+            ok, failed = lapi.add_decisions(
+                ips=source_ips,
+                duration=config.decision_duration,
+                reason=f"{config.decision_reason} ({source_name})",
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=build_scenario(config, source_name),
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
+
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source=source_name,
+                    message="lapi_write_failure",
+                ).set(failed)
+
+        logger.info(f"Consolidated alerts: {stats.imported_ok} IPs imported")
+
+    # Flush consolidated alert (single alert for all sources, legacy format)
+    if config.consolidate_alerts and config.scenario_format != "structured" and deferred_ips:
         logger.info(f"Sending consolidated alert with {len(deferred_ips)} IPs from all sources")
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(deferred_ips)} IPs in single alert")
@@ -2880,7 +3096,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         else:
             # Send all deferred IPs in a single alert
             consolidated_reason = f"{config.decision_reason} (all sources)"
-            consolidated_scenario = f"{config.decision_scenario} (all sources)"
+            consolidated_scenario = build_scenario(config, None)
             ok, failed = lapi.add_decisions(
                 ips=deferred_ips,
                 duration=config.decision_duration,
@@ -3104,6 +3320,10 @@ Environment Variables:
   CROWDSEC_LAPI_BOUNCER_CERT_PATH Bouncer client cert for decision reads
   CROWDSEC_LAPI_BOUNCER_KEY_PATH  Bouncer client key for decision reads
   DECISION_DURATION        How long decisions last (default: 24h)
+  SCENARIO_FORMAT          legacy ("external/blocklist (Feed)") or structured
+                           ("external/blocklist-import/<feed>/c<0-100>") (default: legacy)
+  SCENARIO_PREFIX          Prefix for structured scenarios (default: external/blocklist-import)
+  FEED_CONFIDENCE          Per-feed confidence overrides, e.g. "tor-exit-nodes=20,stopforumspam=40"
   BATCH_SIZE               IPs per batch (default: 1000)
   LOG_LEVEL                DEBUG, INFO, WARN, ERROR (default: INFO)
   DRY_RUN                  Set to true for dry run mode

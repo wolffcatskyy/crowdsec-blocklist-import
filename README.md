@@ -262,7 +262,7 @@ api:
 | `DRY_RUN` | `false` | Preview without importing |
 | `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = single run) |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `60` | Machine heartbeat interval in seconds (0 = disabled) |
-| `CONSOLIDATE_ALERTS` | `false` | Batch all IPs into one alert per run (saves alert quota) |
+| `CONSOLIDATE_ALERTS` | `false` | Batch IPs into fewer alerts per run (saves alert quota). With `SCENARIO_FORMAT=structured`, one alert per feed so per-feed confidence is kept |
 
 ### Notification Settings
 

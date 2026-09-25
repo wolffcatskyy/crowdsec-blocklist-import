@@ -1,0 +1,92 @@
+name: Publish to PyPI
+
+# Publishes sdist + wheel to https://pypi.org/p/crowdsec-blocklist-import
+# using PyPI Trusted Publishing (OIDC). No API token is stored anywhere:
+# PyPI trusts this exact workflow file + the "pypi" environment in this repo.
+# PEP 740 attestations are generated and uploaded automatically.
+#
+# Only version tags trigger it, so nothing reaches PyPI from main or PRs.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(python3 -c "
+          import re
+          with open('blocklist_import.py') as f:
+              m = re.search(r'__version__\s*=\s*\"([^\"]+)\"', f.read())
+              print(m.group(1) if m else 'UNKNOWN')
+          ")
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match __version__ ($CODE_VERSION) in blocklist_import.py"
+            exit 1
+          fi
+          echo "Version check passed: $TAG_VERSION"
+
+      - name: Run tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+          python -m pytest test_blocklist_import.py -q
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build twine
+          python -m build
+          twine check --strict dist/*
+          ls -l dist/
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/crowdsec-blocklist-import --version
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/crowdsec-blocklist-import
+    permissions:
+      id-token: write   # required for Trusted Publishing (OIDC)
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # skip-existing makes re-runs of the same tag safe (same idea as #101).
+        with:
+          skip-existing: true

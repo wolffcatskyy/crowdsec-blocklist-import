@@ -88,7 +88,8 @@ def clean_env(monkeypatch):
                                                                "RUN_ON_START", "WEBHOOK_",
                                                                "ABUSEIPDB_", "ALLOWLIST",
                                                                "CUSTOM_", "PRESET",
-                                                               "BLOCKLISTS_", "FAIL_ON_"))]
+                                                               "BLOCKLISTS_", "FAIL_ON_",
+                                                               "SCENARIO_", "FEED_"))]
     for k in keys_to_remove:
         monkeypatch.delenv(k, raising=False)
     yield monkeypatch
@@ -2760,3 +2761,207 @@ class TestLicenseMetadata:
         assert "attribution_required" in caplog.text
         assert "Spamhaus DROP terms" in caplog.text
         assert "presets: embedded" in caplog.text
+
+
+# =============================================================================
+# Structured scenario names (feed + confidence)
+# ===========================================================================
+
+
+class TestConfidenceTiers:
+    """Default confidence values must stay inside the maintainer-reviewed
+    tiers (docs/scenario-format.md). The numbers are judgment calls; these
+    tests pin the agreed tiers, not a measurement."""
+
+    def test_tor_exits_in_20_30(self):
+        for slug in ("tor-exit-nodes", "tor-dan-me-uk"):
+            assert 20 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 30
+
+    def test_curated_c2_in_90_95(self):
+        for slug in ("spamhaus-drop", "feodo-tracker", "urlhaus", "abuseipdb", "abuseipdb-api"):
+            assert 90 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 95
+
+    def test_high_signal_reports_in_70_85(self):
+        for slug in ("firehol-level1", "emerging-threats", "ci-army", "dshield", "dshield-top-attackers"):
+            assert 70 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 85
+
+    def test_automated_reports_and_scanners_in_50_65(self):
+        for slug in ("blocklist-de-all", "blocklist-de-ssh", "blocklist-de-apache",
+                     "blocklist-de-mail", "ipsum", "shodan-scanners",
+                     "maltrail-scanners", "static-scanner-ips-censys"):
+            assert 50 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 65
+
+    def test_noisy_lists_in_20_40(self):
+        for slug in ("firehol-level3", "stopforumspam", "vxvault"):
+            assert 20 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 40
+
+
+class TestStructuredDedupAndConsolidation:
+    """Structured mode: an IP listed by several feeds gets the HIGHEST
+    confidence among them, and CONSOLIDATE_ALERTS consolidates per feed."""
+
+    def _make_config(self, consolidate: bool = False) -> Config:
+        cfg = Config()
+        cfg.machine_id = "testmachine"
+        cfg.machine_password = "testpass"
+        cfg.dry_run = False
+        cfg.telemetry_enabled = False
+        cfg.metrics_enabled = False
+        cfg.heartbeat_interval = 0
+        cfg.scenario_format = "structured"
+        cfg.consolidate_alerts = consolidate
+        cfg.feed_confidence = {"lowfeed": 40, "highfeed": 90}
+        return cfg
+
+    def _patch_sources(self, monkeypatch):
+        # LowFeed is defined first; both feeds list 192.0.2.1.
+        low = BlocklistSource(name="LowFeed", preset_values=["192.0.2.1", "192.0.2.2"])
+        high = BlocklistSource(name="HighFeed", preset_values=["192.0.2.1", "192.0.2.3"])
+        monkeypatch.setattr(bi, "BLOCKLIST_SOURCES", [low, high])
+
+    def _make_lapi(self):
+        lapi = MagicMock()
+        lapi.health_check.return_value = True
+        lapi.can_write.return_value = True
+        lapi.get_existing_ips.return_value = []
+        lapi.add_decisions.side_effect = lambda ips, **kw: (len(ips), 0)
+        return lapi
+
+    def _run(self, cfg, lapi, monkeypatch):
+        monkeypatch.setattr(bi, "create_http_session", lambda *a, **kw: MagicMock())
+        monkeypatch.setattr(bi, "build_allowlist", lambda *a, **kw: MagicMock())
+        monkeypatch.setattr(bi, "get_metrics", lambda *a, **kw: None)
+        monkeypatch.setattr(bi, "create_lapi_client_from_config", lambda *a, **kw: lapi)
+        monkeypatch.setattr(bi, "send_telemetry", lambda *a, **kw: None)
+        monkeypatch.setattr(bi, "send_webhook", lambda *a, **kw: None)
+        logger = logging.getLogger("test_structured_dedup")
+        return bi.run_import(cfg, logger)
+
+    def _calls(self, lapi):
+        return [
+            {"ips": c.kwargs["ips"], "scenario": c.kwargs["scenario"]}
+            for c in lapi.add_decisions.call_args_list
+        ]
+
+    def test_shared_ip_gets_highest_confidence(self, monkeypatch):
+        cfg = self._make_config()
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 2
+        # HighFeed is processed first despite being defined second.
+        assert calls[0]["scenario"] == "external/blocklist-import/highfeed/c90"
+        assert calls[1]["scenario"] == "external/blocklist-import/lowfeed/c40"
+        # The shared IP lands on the highest-confidence feed only.
+        assert "192.0.2.1" in calls[0]["ips"]
+        assert "192.0.2.1" not in calls[1]["ips"]
+        assert sorted(calls[1]["ips"]) == ["192.0.2.2"]
+
+    def test_consolidate_structured_keeps_per_feed_confidence(self, monkeypatch):
+        cfg = self._make_config(consolidate=True)
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 2  # one consolidated alert per feed, not one mixed alert
+        scenarios = {c["scenario"] for c in calls}
+        assert scenarios == {
+            "external/blocklist-import/highfeed/c90",
+            "external/blocklist-import/lowfeed/c40",
+        }
+        assert "external/blocklist-import/all-sources" not in scenarios
+        high = next(c for c in calls if "highfeed" in c["scenario"])
+        low = next(c for c in calls if "lowfeed" in c["scenario"])
+        assert sorted(high["ips"]) == ["192.0.2.1", "192.0.2.3"]
+        assert low["ips"] == ["192.0.2.2"]
+
+    def test_consolidate_legacy_stays_single_mixed_alert(self, monkeypatch):
+        cfg = self._make_config(consolidate=True)
+        cfg.scenario_format = "legacy"
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 1
+        assert calls[0]["scenario"] == f"{cfg.decision_scenario} (all sources)"
+        assert sorted(calls[0]["ips"]) == ["192.0.2.1", "192.0.2.2", "192.0.2.3"]
+
+
+class TestStructuredScenarios:
+    SCENARIO_RE = r"^external/blocklist-import/[a-z0-9]+(?:-[a-z0-9]+)*/c(?:[0-9]|[1-9][0-9]|100)$"
+
+    def test_feed_slug(self):
+        assert bi.feed_slug("Spamhaus DROP") == "spamhaus-drop"
+        assert bi.feed_slug("Tor (dan.me.uk)") == "tor-dan-me-uk"
+        assert bi.feed_slug("Blocklist.de all") == "blocklist-de-all"
+        assert bi.feed_slug("Static scanner IPs (Censys)") == "static-scanner-ips-censys"
+        assert bi.feed_slug("custom_blocklist_0") == "custom-blocklist-0"
+
+    def test_every_builtin_source_has_unique_slug_and_default(self):
+        slugs = [bi.feed_slug(s.name) for s in bi.BLOCKLIST_SOURCES]
+        assert len(slugs) == len(set(slugs))
+        for slug in slugs:
+            assert bi._SLUG_VALID_RE.match(slug), slug
+            assert slug in bi.FEED_CONFIDENCE_DEFAULTS, slug
+            assert 0 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 100
+
+    def test_legacy_default_unchanged(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        config = Config.from_env()
+        assert config.scenario_format == "legacy"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/blocklist (Spamhaus DROP)"
+        assert bi.build_scenario(config, None) == "external/blocklist (all sources)"
+
+    def test_legacy_respects_decision_scenario(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("DECISION_SCENARIO", "external/malware")
+        config = Config.from_env()
+        assert bi.build_scenario(config, "IPsum") == "external/malware (IPsum)"
+
+    def test_structured(self, clean_env, monkeypatch):
+        import re as _re
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "Structured")
+        config = Config.from_env()
+        assert config.scenario_format == "structured"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/blocklist-import/spamhaus-drop/c95"
+        assert bi.build_scenario(config, "Tor exit nodes") == "external/blocklist-import/tor-exit-nodes/c25"
+        assert bi.build_scenario(config, "custom_blocklist_0") == "external/blocklist-import/custom-blocklist-0/c50"
+        assert bi.build_scenario(config, None) == "external/blocklist-import/all-sources"
+        for source in bi.BLOCKLIST_SOURCES:
+            assert _re.match(self.SCENARIO_RE, bi.build_scenario(config, source.name)), source.name
+
+    def test_structured_prefix_and_overrides(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "structured")
+        monkeypatch.setenv("SCENARIO_PREFIX", "external/feeds/")
+        monkeypatch.setenv("FEED_CONFIDENCE", "tor-exit-nodes=10, Spamhaus DROP=99,custom_blocklist_0=150")
+        config = Config.from_env()
+        assert bi.build_scenario(config, "Tor exit nodes") == "external/feeds/tor-exit-nodes/c10"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/feeds/spamhaus-drop/c99"
+        assert bi.build_scenario(config, "custom_blocklist_0") == "external/feeds/custom-blocklist-0/c100"
+
+    def test_invalid_format_falls_back_to_legacy(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "json")
+        assert Config.from_env().scenario_format == "legacy"
+
+    def test_parse_feed_confidence_skips_malformed(self, logger):
+        parsed = bi.parse_feed_confidence("good=80,noequals,bad=abc,=5,neg=-3", logger)
+        assert parsed == {"good": 80, "neg": 0}
+
+    def test_add_decisions_uses_structured_scenario(self, lapi, session_mock):
+        config = Config(scenario_format="structured")
+        scenario = bi.build_scenario(config, "Feodo Tracker")
+        lapi._get_machine_headers = MagicMock(return_value={"Authorization": "Bearer x"})
+        resp = MagicMock(status_code=201)
+        resp.json.return_value = ["1"]
+        session_mock.post.return_value = resp
+        lapi.add_decisions(["1.2.3.4"], "24h", "r", "ban", "blocklist-import", scenario)
+        payload = session_mock.post.call_args.kwargs["json"][0]
+        assert payload["scenario"] == "external/blocklist-import/feodo-tracker/c95"
+        assert payload["decisions"][0]["scenario"] == "external/blocklist-import/feodo-tracker/c95"
