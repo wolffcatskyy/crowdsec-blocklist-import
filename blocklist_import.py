@@ -393,8 +393,9 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
 #             (see feed_slug()).
 # confidence: integer 0-100, how likely an entry from the feed is a real,
 #             current threat (low = more false-positive risk).
-# Consolidated alerts (CONSOLIDATE_ALERTS=true) mix feeds, so they use
-# <SCENARIO_PREFIX>/all-sources with no confidence.
+# Consolidated alerts (CONSOLIDATE_ALERTS=true) are sent per feed in
+# structured mode, so each keeps its per-feed confidence. Only the legacy
+# format uses a single mixed <prefix>/all-sources alert with no confidence.
 #
 # The legacy format "<DECISION_SCENARIO> (<Feed Name>)" stays the default so
 # existing filters, dashboards and cscli queries keep working.
@@ -408,41 +409,46 @@ DEFAULT_FEED_CONFIDENCE = 50
 # categories like Tor exits and research scanners). Override with
 # FEED_CONFIDENCE="slug=NN,slug=NN".
 FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
-    # Curated, hijacked/criminal netblocks and confirmed C2
+    # 90-95: curated, few false positives (hijacked/criminal netblocks,
+    # confirmed C2, abuse.ch curated lists)
     "spamhaus-drop": 95,
     "feodo-tracker": 95,
-    "firehol-level1": 90,
     "abuseipdb": 90,
     "abuseipdb-api": 90,
+    "urlhaus": 90,
+    # 70-85: high-signal attack/C2 reports (ET compromised, FireHOL level 1,
+    # CINS, DShield top attackers) and consensus lists (IPsum level 4+)
+    "firehol-level1": 85,
     "ipsum-level4": 85,
     "emerging-threats": 85,
     "dshield": 85,
     "cybercrime-tracker": 80,
     "monty-security-c2": 80,
     "dshield-top-attackers": 80,
-    "urlhaus": 75,
-    "ipsum": 75,
-    "firehol-level2": 75,
-    "blocklist-de-ssh": 75,
     "binary-defense": 75,
-    "bruteforce-blocker": 75,
     "ci-army": 75,
-    # Broad automated attack reports
-    "blocklist-de-all": 70,
+    "firehol-level2": 75,
     "botvrij": 70,
-    "greensnow": 70,
-    "vxvault": 70,
-    "blocklist-de-apache": 65,
-    "blocklist-de-mail": 65,
+    # 50-65: broad automated attack reports (Blocklist.de, IPsum at lower
+    # levels) and non-malicious scanner lists
+    "blocklist-de-ssh": 65,
+    "ipsum": 65,
+    "greensnow": 65,
     "sentinel": 65,
-    "firehol-level3": 60,
-    "stopforumspam": 55,
-    # Not malicious by definition: scanners and anonymity networks
+    "bruteforce-blocker": 65,
+    "blocklist-de-all": 60,
+    "blocklist-de-apache": 55,
+    "blocklist-de-mail": 55,
     "shodan-scanners": 50,
     "maltrail-scanners": 50,
     "static-scanner-ips-censys": 50,
-    "tor-exit-nodes": 40,
-    "tor-dan-me-uk": 40,
+    # 20-40: noisier aggregated lists (FireHOL level 3/4, StopForumSpam,
+    # VXVault) and anonymity networks (Tor exits are not malicious per se)
+    "vxvault": 35,
+    "firehol-level3": 35,
+    "stopforumspam": 35,
+    "tor-exit-nodes": 25,
+    "tor-dan-me-uk": 25,
 }
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -494,7 +500,8 @@ def feed_confidence(source_name: str, overrides: Optional[dict[str, int]] = None
 def build_scenario(config: "Config", source_name: Optional[str]) -> str:
     """Build the decision/alert scenario name for a feed.
 
-    source_name=None means a consolidated alert covering all sources.
+    source_name=None means a consolidated alert covering all sources
+    (legacy format only; structured mode consolidates per feed instead).
     """
     if config.scenario_format == "structured":
         prefix = config.scenario_prefix.rstrip("/")
@@ -2377,8 +2384,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     if config.scenario_format == "structured":
         logger.info(f"Scenario format: structured ({config.scenario_prefix}/<feed>/c<confidence>)")
         if config.consolidate_alerts:
-            logger.info("CONSOLIDATE_ALERTS is on: one mixed alert per run, "
-                        f"scenario {config.scenario_prefix}/all-sources carries no per-feed confidence")
+            logger.info("CONSOLIDATE_ALERTS is on: one consolidated alert per feed, "
+                        "each keeping its per-feed confidence")
 
     if config.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
@@ -2465,6 +2472,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             if url:
                 enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, enabled_key="custom_blocklists"))
 
+    if config.scenario_format == "structured":
+        # Highest-confidence feeds first. Deduplication keeps the first feed
+        # that claims an IP, so processing order decides the scenario an IP
+        # listed by several feeds gets. Sorting makes that deterministic:
+        # the IP always gets the highest confidence among the feeds listing
+        # it. Stable sort keeps the definition order within equal confidence.
+        enabled_sources.sort(
+            key=lambda s: feed_confidence(s.name, config.feed_confidence),
+            reverse=True,
+        )
+
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
     # Compute max-decisions budget (None = unlimited; 0 = nothing to import)
@@ -2481,11 +2499,17 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
 
     # Process blocklists and batch import
     batch: list[str] = []
-    # When consolidate_alerts is enabled, defer all IPs for a single alert at end of run
+    # When consolidate_alerts is enabled, defer IPs for alert(s) at end of run.
+    # Legacy format: one mixed alert for all sources. Structured format: one
+    # alert per feed, so per-feed confidence survives consolidation.
     deferred_ips: list[str] = []
+    deferred_by_source: dict[str, list[str]] = {}
 
     if config.consolidate_alerts:
-        logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
+        if config.scenario_format == "structured":
+            logger.info("Alert consolidation enabled — one consolidated alert per feed")
+        else:
+            logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
 
     def log_batch_stats(ok: int, failed: int, batch_cnt: int):
         if ok > 0:
@@ -2500,9 +2524,12 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             return 0, 0
 
         if config.consolidate_alerts:
-            # Defer IPs for a single consolidated alert at end of run
+            # Defer IPs for consolidated alert(s) at end of run
             count = len(batch)
-            deferred_ips.extend(batch)
+            if config.scenario_format == "structured":
+                deferred_by_source.setdefault(source_name, []).extend(batch)
+            else:
+                deferred_ips.extend(batch)
             batch = []
             return count, 0
 
@@ -2548,15 +2575,24 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         if source.preset_values:
             logger.debug(f"Adding {source.name} ({len(source.preset_values)} preset IPs)")
             t0 = time.time()
-            # Deduplicate preset values against seen_ips (same as fetch_blocklist path)
+            # Deduplicate preset values against seen_ips (same as fetch_blocklist path):
+            # skip IPs that already hold a non-expiring decision, refresh only
+            # ones expiring soon. A preset IP already claimed by an earlier
+            # (higher-confidence, in structured mode) feed keeps that feed's
+            # scenario instead of being re-written under this one.
             new_ips = []
             refreshed_ips = []
+            non_expiring_preset_seen = set(non_expiring_known_ips)
+            expiring_preset_known = set(expiring_known_ips_list)
             for ip in source.preset_values:
-                if ip not in [_ip for _ip, _ in seen_ips]:
-                    seen_ips.add((ip, timedelta(days=1)))
-                    new_ips.append(ip)
-                else:
+                if ip in non_expiring_preset_seen:
+                    continue
+                non_expiring_preset_seen.add(ip)
+                seen_ips.add((ip, timedelta(days=1)))
+                if ip in expiring_preset_known:
                     refreshed_ips.append(ip)
+                else:
+                    new_ips.append(ip)
             result = FetchResult(
                 source=source,
                 success=True,
@@ -2648,8 +2684,41 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
             logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
             break
 
-    # Flush consolidated alert (single alert for all sources)
-    if config.consolidate_alerts and deferred_ips:
+    # Flush consolidated alerts (structured format: one alert per feed, so
+    # each keeps its per-feed confidence)
+    if config.consolidate_alerts and config.scenario_format == "structured" and deferred_by_source:
+        total_deferred = sum(len(ips) for ips in deferred_by_source.values())
+        logger.info(
+            f"Sending {len(deferred_by_source)} consolidated alerts "
+            f"({total_deferred} IPs, one per feed)"
+        )
+        for source_name, source_ips in deferred_by_source.items():
+            if config.dry_run:
+                logger.debug(f"DRY RUN: Would import {len(source_ips)} IPs in consolidated alert for {source_name}")
+                stats.imported_ok += len(source_ips)
+                continue
+            ok, failed = lapi.add_decisions(
+                ips=source_ips,
+                duration=config.decision_duration,
+                reason=f"{config.decision_reason} ({source_name})",
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=build_scenario(config, source_name),
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
+
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source=source_name,
+                    message="lapi_write_failure",
+                ).set(failed)
+
+        logger.info(f"Consolidated alerts: {stats.imported_ok} IPs imported")
+
+    # Flush consolidated alert (single alert for all sources, legacy format)
+    if config.consolidate_alerts and config.scenario_format != "structured" and deferred_ips:
         logger.info(f"Sending consolidated alert with {len(deferred_ips)} IPs from all sources")
         if config.dry_run:
             logger.debug(f"DRY RUN: Would import {len(deferred_ips)} IPs in single alert")
