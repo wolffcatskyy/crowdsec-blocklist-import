@@ -416,6 +416,17 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_dshield",
         extract_field=0,
     ),
+    # Data-Shield IPv4 (duggytuxy) - opt-in per discussion #76. Distinct
+    # from the SANS ISC "DShield" feeds above despite the similar name.
+    BlocklistSource(
+        name="Data-Shield IPv4",
+        license="GPL-3.0-only",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="GPL-3.0 community blocklist by Duggy Tuxy (Laurent Minne); credit the Data-Shield IPv4 Blocklist Community on redistribution",
+        url="https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/main/prod_data-shield_ipv4_blocklist.txt",
+        enabled_key="enable_data_shield",
+    ),
     # VXVault Malware (FireHOL mirror)
     BlocklistSource(
         name="VXVault",
@@ -538,6 +549,14 @@ _ALWAYS_OFF_FEEDS: set[str] = {
     # preset or env var enables them. Empty until the next dead feed.
 }
 
+# Explicit opt-in feeds: off under every default scheme - every preset
+# (including max), BLOCKLISTS_OPT_IN mode, and the legacy all-on default.
+# Only an explicit ENABLE_*=true turns them on. Data-Shield was promised
+# as disabled-by-default in discussion #76.
+_OPT_IN_FEEDS: set[str] = {
+    "enable_data_shield",       # Data-Shield IPv4 (duggytuxy)
+}
+
 
 # Default MAX_DECISIONS per preset. The embedded preset exists for the #21
 # crash (ipset overflow on UDM/UDR-class devices), so it also caps the total
@@ -555,7 +574,7 @@ def preset_max_decisions_default(preset: str) -> int:
 
 def preset_feed_default(preset: str, enabled_key: str) -> bool:
     """Return the default for an enabled_key under the given preset."""
-    if enabled_key in _ALWAYS_OFF_FEEDS:
+    if enabled_key in _ALWAYS_OFF_FEEDS or enabled_key in _OPT_IN_FEEDS:
         return False
     if preset == "embedded":
         return enabled_key in _EMBEDDED_FEEDS
@@ -624,6 +643,7 @@ FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
     "ipsum": 65,
     "greensnow": 65,
     "sentinel": 65,
+    "data-shield-ipv4": 65,
     "bruteforce-blocker": 65,
     "blocklist-de-all": 60,
     "blocklist-de-apache": 55,
@@ -927,7 +947,8 @@ class Config:
     # Exit non-zero when any enabled feed fails to fetch (default: false)
     fail_on_dead_feed: bool = False
 
-    # Blocklist enables (all enabled by default)
+    # Blocklist enables (all enabled by default except enable_data_shield,
+    # an explicit opt-in feed that stays off unless ENABLE_DATA_SHIELD=true)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
     enable_blocklist_de: bool = True
@@ -950,6 +971,7 @@ class Config:
     enable_cybercrime_tracker: bool = True
     enable_vxvault: bool = True
     enable_sentinel: bool = True
+    enable_data_shield: bool = False
 
     @classmethod
     def from_env(cls) -> Config:
@@ -982,6 +1004,9 @@ class Config:
         opt_in_deprecation = not preset and not blocklists_opt_in_set
 
         def feed_default(key: str) -> bool:
+            if key in _OPT_IN_FEEDS:
+                # explicit opt-in feeds stay off under every default scheme
+                return False
             if preset:
                 return preset_feed_default(preset, key)
             return not blocklists_opt_in
@@ -1088,7 +1113,8 @@ class Config:
             enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default("enable_abuse_ipdb")),
             enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default("enable_cybercrime_tracker")),
             enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default("enable_vxvault")),
-            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel"))
+            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel")),
+            enable_data_shield=get_bool("ENABLE_DATA_SHIELD", feed_default("enable_data_shield"))
         )
 
 
