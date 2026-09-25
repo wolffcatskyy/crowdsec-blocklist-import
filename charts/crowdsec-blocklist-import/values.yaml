@@ -1,0 +1,115 @@
+# Run mode:
+#   cronjob    - scheduled one-shot imports via a batch/v1 CronJob (default;
+#                this is how most users run the container today)
+#   deployment - long-lived daemon that repeats every config.interval seconds
+mode: cronjob
+
+image:
+  repository: ghcr.io/wolffcatskyy/crowdsec-blocklist-import
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion (the pinned release image).
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  # The importer talks to the CrowdSec LAPI, not the Kubernetes API.
+  automountToken: false
+  annotations: {}
+  name: ""
+
+# Settings for mode: cronjob
+cronjob:
+  schedule: "0 * * * *"
+  timeZone: ""
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  restartPolicy: Never
+
+# Feed switches. Every ENABLE_* variable defaults to true upstream;
+# BLOCKLISTS_OPT_IN=true flips that default so feeds are opt-in, and any
+# ENABLE_* entry here overrides it per feed. See `python blocklist_import.py
+# --list-blocklists` for the full list of switches.
+feedFlags:
+  BLOCKLISTS_OPT_IN: "false"
+  # ENABLE_IPSUM: "true"
+  # ENABLE_SPAMHAUS: "true"
+  # ENABLE_FIREHOL_LEVEL3: "false"
+
+config:
+  crowdsecLapiUrl: "http://crowdsec:8080"
+  # Seconds between imports (INTERVAL). Required to be > 0 when
+  # mode=deployment; forced to 0 (single run) in cronjob mode.
+  interval: 3600
+  crowdsecHeartbeatInterval: 60
+  decisionDuration: "24h"
+  decisionReason: "external_blocklist"
+  decisionType: "ban"
+  decisionOrigin: "blocklist-import"
+  decisionScenario: "external/blocklist"
+  batchSize: 1000
+  fetchTimeout: 60
+  maxRetries: 3
+  # Maximum number of decisions pushed per run. 0 = unlimited.
+  maxDecisions: 0
+  logLevel: "INFO"
+  # Comma-separated IPs/CIDRs that are never banned.
+  allowlist: ""
+  # Comma-separated additional blocklist URLs.
+  customBlocklists: ""
+  refreshPeriodFrequentMn: 90
+  refreshPeriodLimitedMn: 330
+  # Anonymous usage ping; set to "false" to disable.
+  telemetryEnabled: "true"
+  # Optional Prometheus pushgateway (host:port), e.g. "pushgateway:9091".
+  metricsPushgatewayUrl: ""
+  # generic | discord | slack. Requires secrets.webhookUrl.
+  webhookType: ""
+  abuseipdbMinConfidence: 90
+  abuseipdbLimit: 10000
+
+# Sensitive values. crowdsecLapiKey is required; the chart creates a Secret
+# from these values unless existingSecret is set.
+secrets:
+  crowdsecLapiKey: ""
+  abuseipdbApiKey: ""
+  webhookUrl: ""
+
+# Name of an existing Secret to use instead of `secrets`. Expected keys:
+# CROWDSEC_LAPI_KEY (required), ABUSEIPDB_API_KEY (optional),
+# WEBHOOK_URL (optional).
+existingSecret: ""
+
+# Extra environment variables appended to the container spec.
+extraEnv: []
+  # - name: CROWDSEC_MACHINE_ID
+  #   value: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources: {}
+  # requests:
+  #   cpu: 50m
+  #   memory: 256Mi
+  # limits:
+  #   memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
