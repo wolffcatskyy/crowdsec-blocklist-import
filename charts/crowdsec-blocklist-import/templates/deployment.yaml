@@ -1,0 +1,58 @@
+{{- include "crowdsec-blocklist-import.validateMode" . -}}
+{{- if eq .Values.mode "deployment" -}}
+{{- if eq (int64 .Values.config.interval) 0 -}}
+{{- fail "config.interval must be greater than 0 when mode=deployment (it is the daemon repeat interval in seconds)" }}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crowdsec-blocklist-import.fullname" . }}
+  labels:
+    {{- include "crowdsec-blocklist-import.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Never run two importers side by side during a rollout; overlapping
+  # runs only duplicate LAPI traffic.
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "crowdsec-blocklist-import.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "crowdsec-blocklist-import.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "crowdsec-blocklist-import.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - {{- include "crowdsec-blocklist-import.container" (dict "root" . "interval" .Values.config.interval) | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
