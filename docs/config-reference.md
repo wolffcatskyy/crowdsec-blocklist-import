@@ -84,6 +84,9 @@ Controls how blocklist decisions are created and managed in CrowdSec.
 | DECISION_TYPE | `ban` | Decision action type | `ban`, `captcha`, `throttle` |
 | DECISION_ORIGIN | `blocklist-import` | Origin label for filtering and auditing | `external-threat-feed` |
 | DECISION_SCENARIO | `external/blocklist` | Scenario name for classification | `external/malware` |
+| SCENARIO_FORMAT | `legacy` | `legacy` writes `<DECISION_SCENARIO> (<Feed Name>)`. `structured` writes `<SCENARIO_PREFIX>/<feed-slug>/c<confidence>` so downstream tools can rank by feed. See [scenario-format.md](scenario-format.md) | `structured` |
+| SCENARIO_PREFIX | `external/blocklist-import` | Prefix for structured scenario names (ignored in legacy mode) | `external/feeds` |
+| FEED_CONFIDENCE | (empty) | Per-feed confidence overrides, 0-100. Keys are feed slugs or feed names | `tor-exit-nodes=20,stopforumspam=40` |
 
 ### Notes on Decision Configuration
 
@@ -91,6 +94,7 @@ Controls how blocklist decisions are created and managed in CrowdSec.
 - **DECISION_TYPE:** Valid values are `ban` (block), `captcha` (challenge), or `throttle` (rate limit)
 - **DECISION_ORIGIN:** Used to group and filter decisions; recommended to match service name
 - **DECISION_SCENARIO:** Helps with alert routing and severity classification
+- **SCENARIO_FORMAT:** `structured` puts the source feed and a confidence value in every scenario name (e.g. `external/blocklist-import/spamhaus-drop/c95`). The crowdsec-unifi-bouncer sidecar (v2.6.0+) uses it to keep high-confidence imports when device capacity runs out. Legacy stays the default so existing `cscli --scenario` filters and dashboards keep matching.
 
 ---
 
