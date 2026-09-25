@@ -550,6 +550,20 @@ _ALWAYS_OFF_FEEDS: set[str] = {
 }
 
 
+# Default MAX_DECISIONS per preset. The embedded preset exists for the #21
+# crash (ipset overflow on UDM/UDR-class devices), so it also caps the total
+# decision count. An explicit MAX_DECISIONS value always wins, including 0
+# (unlimited).
+PRESET_MAX_DECISIONS: dict[str, int] = {
+    "embedded": 15000,
+}
+
+
+def preset_max_decisions_default(preset: str) -> int:
+    """Return the default MAX_DECISIONS for a preset (0 = unlimited)."""
+    return PRESET_MAX_DECISIONS.get(preset, 0)
+
+
 def preset_feed_default(preset: str, enabled_key: str) -> bool:
     """Return the default for an enabled_key under the given preset."""
     if enabled_key in _ALWAYS_OFF_FEEDS:
@@ -844,6 +858,14 @@ class Config:
         fh_l2_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level2")
         fh_l3_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level3")
 
+        # MAX_DECISIONS: an explicit value always wins (0 = unlimited);
+        # otherwise the preset supplies the default (embedded caps at 15K).
+        max_decisions_raw = (os.getenv("MAX_DECISIONS") or "").strip()
+        if max_decisions_raw:
+            max_decisions = int(max_decisions_raw)
+        else:
+            max_decisions = preset_max_decisions_default(preset)
+
         return cls(
             lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
             lapi_key=os.getenv("CROWDSEC_LAPI_KEY", ""),
@@ -886,7 +908,7 @@ class Config:
             abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
-            max_decisions=int(os.getenv("MAX_DECISIONS", "0")),
+            max_decisions=max_decisions,
             preset=preset,
             opt_in_deprecation=opt_in_deprecation,
             fail_on_dead_feed=get_bool("FAIL_ON_DEAD_FEED", False),
