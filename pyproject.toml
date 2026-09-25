@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crowdsec-blocklist-import"
-version = "3.8.0"
+dynamic = ["version"]
 description = "Memory-efficient importer for 32 public threat feeds into CrowdSec via LAPI"
 readme = "README.md"
 license = {text = "MIT"}
@@ -53,3 +53,8 @@ crowdsec-blocklist-import = "blocklist_import:main"
 
 [tool.setuptools]
 py-modules = ["blocklist_import"]
+
+[tool.setuptools.dynamic]
+# Single source of truth: the release workflows already require the tag to
+# match __version__, so the published package version always matches too.
+version = {attr = "blocklist_import.__version__"}
