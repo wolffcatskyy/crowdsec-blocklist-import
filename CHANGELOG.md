@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ### Added
 
 - **`--list-sources --format md`** — Print the source list as a Markdown table with a live feed count, so documentation can be regenerated instead of drifting.
+- **Structured scenario names with feed + confidence** - `SCENARIO_FORMAT=structured` writes `external/blocklist-import/<feed-slug>/c<0-100>` (e.g. `external/blocklist-import/spamhaus-drop/c95`) so downstream tools can rank imported IPs by feed quality. The crowdsec-unifi-bouncer sidecar uses it to drop low-confidence imports first when device capacity runs out. Per-feed defaults are built in; override with `FEED_CONFIDENCE="slug=NN,..."`, change the prefix with `SCENARIO_PREFIX`. Legacy `external/blocklist (Feed Name)` stays the default, so existing filters and dashboards are untouched. See [docs/scenario-format.md](docs/scenario-format.md).
 
 ### Fixed
 
