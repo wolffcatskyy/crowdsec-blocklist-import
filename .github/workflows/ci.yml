@@ -132,14 +132,15 @@ jobs:
           docker exec crowdsec cscli alerts list -o json > alerts.json
           python3 tests/assert_live_lapi.py alerts.json --consolidated
 
-      - name: Assert imported alerts cannot leak upstream as community signals
+      - name: Assert Central API is disabled (imported alerts cannot leak upstream)
         run: |
-          # The instance has no online API credentials and is not enrolled in
-          # the console, so nothing can be shared upstream. Decisions are
-          # pushed with origin "blocklist-import" (asserted above), not a hub
-          # scenario.
-          docker exec crowdsec test ! -f /etc/crowdsec/online_api_credentials.yaml
-          docker exec crowdsec cscli console status || true
+          oc=$(docker exec crowdsec cscli config show --key Config.API.Server.OnlineClient)
+          [ "$oc" = "nil" ] || { echo "online_client configured: $oc"; exit 1; }
+          if out=$(docker exec crowdsec cscli capi status 2>&1); then
+            echo "CAPI unexpectedly configured: $out"; exit 1
+          fi
+          echo "$out" | grep -q "no configuration for Central API" || { echo "unexpected: $out"; exit 1; }
+          docker exec crowdsec sh -c 'test ! -s /etc/crowdsec/online_api_credentials.yaml'
 
   release:
     name: Create GitHub Release
