@@ -59,13 +59,15 @@ jobs:
         run: |
           docker run -d --name crowdsec -p 8080:8080 \
             -e DISABLE_ONLINE_API=true \
-            crowdsecurity/crowdsec:latest
+            -e CROWDSEC_BYPASS_DB_VOLUME_CHECK=true \
+            crowdsecurity/crowdsec:v1.8.1
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/decisions || true)
             if [ "$code" != "000" ]; then echo "LAPI up (HTTP $code)"; break; fi
             sleep 2
           done
-          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass -f
+          [ "$code" != "000" ] || { docker logs crowdsec; exit 1; }
+          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass --force
           docker exec crowdsec cscli machines validate ci-importer || true
 
       - name: Serve test feeds
@@ -99,13 +101,15 @@ jobs:
           docker rm -f crowdsec
           docker run -d --name crowdsec -p 8080:8080 \
             -e DISABLE_ONLINE_API=true \
-            crowdsecurity/crowdsec:latest
+            -e CROWDSEC_BYPASS_DB_VOLUME_CHECK=true \
+            crowdsecurity/crowdsec:v1.8.1
           for i in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/decisions || true)
             if [ "$code" != "000" ]; then echo "LAPI up (HTTP $code)"; break; fi
             sleep 2
           done
-          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass -f
+          [ "$code" != "000" ] || { docker logs crowdsec; exit 1; }
+          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass --force
           docker exec crowdsec cscli machines validate ci-importer || true
 
       - name: Run importer with CONSOLIDATE_ALERTS=true
