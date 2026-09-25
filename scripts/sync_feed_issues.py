@@ -71,6 +71,9 @@ def main() -> int:
         return next((i for i in existing if marker(url) in (i.get("body") or "")), None)
 
     for feed in report:
+        if feed.get("skipped"):
+            print(f"Skipped by name: {feed['name']} ({feed['reason']})")
+            continue
         issue = find(feed["url"])
         if not feed["ok"]:
             if issue is None:
