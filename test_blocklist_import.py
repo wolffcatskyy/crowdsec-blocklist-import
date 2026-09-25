@@ -2396,6 +2396,129 @@ class TestMaxDecisionsCap:
 # ===========================================================================
 
 
+class TestConfidenceTiers:
+    """Default confidence values must stay inside the maintainer-reviewed
+    tiers (docs/scenario-format.md). The numbers are judgment calls; these
+    tests pin the agreed tiers, not a measurement."""
+
+    def test_tor_exits_in_20_30(self):
+        for slug in ("tor-exit-nodes", "tor-dan-me-uk"):
+            assert 20 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 30
+
+    def test_curated_c2_in_90_95(self):
+        for slug in ("spamhaus-drop", "feodo-tracker", "urlhaus", "abuseipdb", "abuseipdb-api"):
+            assert 90 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 95
+
+    def test_high_signal_reports_in_70_85(self):
+        for slug in ("firehol-level1", "emerging-threats", "ci-army", "dshield", "dshield-top-attackers"):
+            assert 70 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 85
+
+    def test_automated_reports_and_scanners_in_50_65(self):
+        for slug in ("blocklist-de-all", "blocklist-de-ssh", "blocklist-de-apache",
+                     "blocklist-de-mail", "ipsum", "shodan-scanners",
+                     "maltrail-scanners", "static-scanner-ips-censys"):
+            assert 50 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 65
+
+    def test_noisy_lists_in_20_40(self):
+        for slug in ("firehol-level3", "stopforumspam", "vxvault"):
+            assert 20 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 40
+
+
+class TestStructuredDedupAndConsolidation:
+    """Structured mode: an IP listed by several feeds gets the HIGHEST
+    confidence among them, and CONSOLIDATE_ALERTS consolidates per feed."""
+
+    def _make_config(self, consolidate: bool = False) -> Config:
+        cfg = Config()
+        cfg.machine_id = "testmachine"
+        cfg.machine_password = "testpass"
+        cfg.dry_run = False
+        cfg.telemetry_enabled = False
+        cfg.metrics_enabled = False
+        cfg.heartbeat_interval = 0
+        cfg.scenario_format = "structured"
+        cfg.consolidate_alerts = consolidate
+        cfg.feed_confidence = {"lowfeed": 40, "highfeed": 90}
+        return cfg
+
+    def _patch_sources(self, monkeypatch):
+        # LowFeed is defined first; both feeds list 192.0.2.1.
+        low = BlocklistSource(name="LowFeed", preset_values=["192.0.2.1", "192.0.2.2"])
+        high = BlocklistSource(name="HighFeed", preset_values=["192.0.2.1", "192.0.2.3"])
+        monkeypatch.setattr(bi, "BLOCKLIST_SOURCES", [low, high])
+
+    def _make_lapi(self):
+        lapi = MagicMock()
+        lapi.health_check.return_value = True
+        lapi.can_write.return_value = True
+        lapi.get_existing_ips.return_value = []
+        lapi.add_decisions.side_effect = lambda ips, **kw: (len(ips), 0)
+        return lapi
+
+    def _run(self, cfg, lapi, monkeypatch):
+        monkeypatch.setattr(bi, "create_http_session", lambda *a, **kw: MagicMock())
+        monkeypatch.setattr(bi, "build_allowlist", lambda *a, **kw: MagicMock())
+        monkeypatch.setattr(bi, "get_metrics", lambda *a, **kw: None)
+        monkeypatch.setattr(bi, "create_lapi_client_from_config", lambda *a, **kw: lapi)
+        monkeypatch.setattr(bi, "send_telemetry", lambda *a, **kw: None)
+        monkeypatch.setattr(bi, "send_webhook", lambda *a, **kw: None)
+        logger = logging.getLogger("test_structured_dedup")
+        return bi.run_import(cfg, logger)
+
+    def _calls(self, lapi):
+        return [
+            {"ips": c.kwargs["ips"], "scenario": c.kwargs["scenario"]}
+            for c in lapi.add_decisions.call_args_list
+        ]
+
+    def test_shared_ip_gets_highest_confidence(self, monkeypatch):
+        cfg = self._make_config()
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 2
+        # HighFeed is processed first despite being defined second.
+        assert calls[0]["scenario"] == "external/blocklist-import/highfeed/c90"
+        assert calls[1]["scenario"] == "external/blocklist-import/lowfeed/c40"
+        # The shared IP lands on the highest-confidence feed only.
+        assert "192.0.2.1" in calls[0]["ips"]
+        assert "192.0.2.1" not in calls[1]["ips"]
+        assert sorted(calls[1]["ips"]) == ["192.0.2.2"]
+
+    def test_consolidate_structured_keeps_per_feed_confidence(self, monkeypatch):
+        cfg = self._make_config(consolidate=True)
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 2  # one consolidated alert per feed, not one mixed alert
+        scenarios = {c["scenario"] for c in calls}
+        assert scenarios == {
+            "external/blocklist-import/highfeed/c90",
+            "external/blocklist-import/lowfeed/c40",
+        }
+        assert "external/blocklist-import/all-sources" not in scenarios
+        high = next(c for c in calls if "highfeed" in c["scenario"])
+        low = next(c for c in calls if "lowfeed" in c["scenario"])
+        assert sorted(high["ips"]) == ["192.0.2.1", "192.0.2.3"]
+        assert low["ips"] == ["192.0.2.2"]
+
+    def test_consolidate_legacy_stays_single_mixed_alert(self, monkeypatch):
+        cfg = self._make_config(consolidate=True)
+        cfg.scenario_format = "legacy"
+        self._patch_sources(monkeypatch)
+        lapi = self._make_lapi()
+        self._run(cfg, lapi, monkeypatch)
+
+        calls = self._calls(lapi)
+        assert len(calls) == 1
+        assert calls[0]["scenario"] == f"{cfg.decision_scenario} (all sources)"
+        assert sorted(calls[0]["ips"]) == ["192.0.2.1", "192.0.2.2", "192.0.2.3"]
+
+
 class TestStructuredScenarios:
     SCENARIO_RE = r"^external/blocklist-import/[a-z0-9]+(?:-[a-z0-9]+)*/c(?:[0-9]|[1-9][0-9]|100)$"
 
@@ -2434,7 +2557,7 @@ class TestStructuredScenarios:
         config = Config.from_env()
         assert config.scenario_format == "structured"
         assert bi.build_scenario(config, "Spamhaus DROP") == "external/blocklist-import/spamhaus-drop/c95"
-        assert bi.build_scenario(config, "Tor exit nodes") == "external/blocklist-import/tor-exit-nodes/c40"
+        assert bi.build_scenario(config, "Tor exit nodes") == "external/blocklist-import/tor-exit-nodes/c25"
         assert bi.build_scenario(config, "custom_blocklist_0") == "external/blocklist-import/custom-blocklist-0/c50"
         assert bi.build_scenario(config, None) == "external/blocklist-import/all-sources"
         for source in bi.BLOCKLIST_SOURCES:
