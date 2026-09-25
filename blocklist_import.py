@@ -313,13 +313,6 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
         enabled_key="enable_cybercrime_tracker",
     ),
-    # Monty Security C2 Tracker
-    BlocklistSource(
-        name="Monty Security C2",
-        url="https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt",
-        enabled_key="enable_monty_security_c2",
-        # NOTE: upstream removed data/all.txt — disabled by default until a new URL is confirmed
-    ),
     # DShield Top Attackers
     BlocklistSource(
         name="DShield Top Attackers",
@@ -386,6 +379,18 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
 
 # All valid ENABLE_* environment variable names (canonical list)
 VALID_ENABLE_VARS: set[str] = {s.enabled_key.upper() for s in BLOCKLIST_SOURCES if s.enabled_key}
+
+# ENABLE_* variables whose feeds have been removed from the registry. They are
+# no longer valid toggles; setting one logs an explicit error naming the feed
+# as removed instead of a generic "unknown variable" warning, so the user
+# learns the feed is gone rather than silently getting nothing from it.
+REMOVED_ENABLE_VARS: dict[str, str] = {
+    "ENABLE_MONTY_SECURITY_C2": (
+        "the Monty Security C2 feed was removed - upstream deleted data/all.txt "
+        "and no replacement URL is confirmed (#80). The toggle does nothing; "
+        "remove it from your configuration."
+    ),
+}
 
 # Valid boolean string values (case-insensitive)
 VALID_BOOL_VALUES: set[str] = {"true", "false", "1", "0", "yes", "no", "on", "off"}
@@ -460,6 +465,12 @@ def validate_enable_env_vars(logger: Optional[logging.Logger] = None) -> tuple[b
 
     for var_name, value in os.environ.items():
         if not var_name.startswith("ENABLE_"):
+            continue
+
+        # Removed feeds: log an error naming the feed as removed
+        if var_name in REMOVED_ENABLE_VARS:
+            if logger:
+                logger.error(f"{var_name}={value} has no effect: {REMOVED_ENABLE_VARS[var_name]}")
             continue
 
         # Check if it's a known variable
@@ -595,7 +606,6 @@ class Config:
     enable_scanners: bool = True
     enable_abuse_ipdb: bool = True
     enable_cybercrime_tracker: bool = True
-    enable_monty_security_c2: bool = False  # upstream feed URL removed; disabled until resolved
     enable_vxvault: bool = True
     enable_sentinel: bool = True
 
@@ -690,7 +700,6 @@ class Config:
             enable_scanners=get_bool("ENABLE_SCANNERS", feed_default),
             enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default),
             enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default),
-            enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2", False),
             enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default),
             enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default)
         )
