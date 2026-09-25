@@ -190,7 +190,6 @@ Each blocklist source can be individually enabled or disabled. By default, block
 | ENABLE_SCANNERS | Shodan/Censys scanner IPs | `true` |
 | ENABLE_ABUSE_IPDB | AbuseIPDB malicious IP database | `true` |
 | ENABLE_CYBERCRIME_TRACKER | Abuse.ch Cybercrime Tracker C&C IPs | `true` |
-| ENABLE_MONTY_SECURITY_C2 | Monty Security C&C server tracker | `true` |
 | ENABLE_VXVAULT | VXvault malware sample repository IPs | `true` |
 | ENABLE_SENTINEL | Sentinel Turris greylist (community-sourced threat intelligence) | `true` |
 

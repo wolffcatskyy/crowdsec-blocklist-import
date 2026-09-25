@@ -1,0 +1,21 @@
+apiVersion: v2
+name: crowdsec-blocklist-import
+description: >-
+  Import public threat-intelligence blocklists into CrowdSec via LAPI.
+  Deploys as a CronJob (scheduled one-shot imports) or a Deployment
+  (long-lived daemon using the built-in scheduler).
+type: application
+version: 0.1.0
+appVersion: "3.8.0"
+home: https://github.com/wolffcatskyy/crowdsec-blocklist-import
+sources:
+  - https://github.com/wolffcatskyy/crowdsec-blocklist-import
+keywords:
+  - crowdsec
+  - security
+  - blocklist
+  - threat-intelligence
+maintainers:
+  - name: wolffcatskyy
+    url: https://github.com/wolffcatskyy
+icon: https://raw.githubusercontent.com/wolffcatskyy/crowdsec-blocklist-import/main/icon.svg

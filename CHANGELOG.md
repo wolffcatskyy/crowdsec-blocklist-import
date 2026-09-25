@@ -18,10 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **README blocklist table** — Removed the defunct Abuse.ch SSL blacklist and the non-existent Talos mention; added the missing Sentinel feed.
 - **`pyproject.toml` version** — Bumped to 3.8.0 to match `__version__` in `blocklist_import.py`.
 - **Config reference** — Documented the `ENABLE_FIREHOL_LEVEL1/2/3` per-level overrides.
+- **Feed health check coverage** — `scripts/check_feeds.py` now covers every defined feed whether or not it is enabled by default. A feed is skipped only via a named skip list with a reason, skips are listed by name in the report, key-required feeds (AbuseIPDB API) get a keyless probe that expects HTTP 401, and a new test fails when any feed is neither checked nor on the skip list.
 
 ### Removed
 
 - **`STATE.md`** — Stale generated repository-state report (dated 2026-02-22, claimed v3.4.0 and 36 feeds) that contradicted current docs.
+- **Monty Security C2 feed** — Removed from the registry, setup wizard, and docs; upstream deleted `data/all.txt` and no replacement URL is confirmed (#80). Configurations that still set `ENABLE_MONTY_SECURITY_C2` now log an error naming the feed as removed. The true feed count is 31; README, `pyproject.toml`, and CONTRIBUTING updated to match `--list-sources`.
 
 ---
 ## [3.8.0] — 2026-09-22
