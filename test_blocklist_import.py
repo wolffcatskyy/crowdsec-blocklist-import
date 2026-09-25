@@ -86,7 +86,8 @@ def clean_env(monkeypatch):
                                                                "METRICS_", "INTERVAL",
                                                                "RUN_ON_START", "WEBHOOK_",
                                                                "ABUSEIPDB_", "ALLOWLIST",
-                                                               "CUSTOM_"))]
+                                                               "CUSTOM_", "SCENARIO_",
+                                                               "FEED_"))]
     for k in keys_to_remove:
         monkeypatch.delenv(k, raising=False)
     yield monkeypatch
@@ -2388,3 +2389,84 @@ class TestMaxDecisionsCap:
         finally:
             for p in patchers:
                 p.stop()
+
+
+# ===========================================================================
+# Structured scenario names (feed + confidence)
+# ===========================================================================
+
+
+class TestStructuredScenarios:
+    SCENARIO_RE = r"^external/blocklist-import/[a-z0-9]+(?:-[a-z0-9]+)*/c(?:[0-9]|[1-9][0-9]|100)$"
+
+    def test_feed_slug(self):
+        assert bi.feed_slug("Spamhaus DROP") == "spamhaus-drop"
+        assert bi.feed_slug("Tor (dan.me.uk)") == "tor-dan-me-uk"
+        assert bi.feed_slug("Blocklist.de all") == "blocklist-de-all"
+        assert bi.feed_slug("Static scanner IPs (Censys)") == "static-scanner-ips-censys"
+        assert bi.feed_slug("custom_blocklist_0") == "custom-blocklist-0"
+
+    def test_every_builtin_source_has_unique_slug_and_default(self):
+        slugs = [bi.feed_slug(s.name) for s in bi.BLOCKLIST_SOURCES]
+        assert len(slugs) == len(set(slugs))
+        for slug in slugs:
+            assert bi._SLUG_VALID_RE.match(slug), slug
+            assert slug in bi.FEED_CONFIDENCE_DEFAULTS, slug
+            assert 0 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 100
+
+    def test_legacy_default_unchanged(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        config = Config.from_env()
+        assert config.scenario_format == "legacy"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/blocklist (Spamhaus DROP)"
+        assert bi.build_scenario(config, None) == "external/blocklist (all sources)"
+
+    def test_legacy_respects_decision_scenario(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("DECISION_SCENARIO", "external/malware")
+        config = Config.from_env()
+        assert bi.build_scenario(config, "IPsum") == "external/malware (IPsum)"
+
+    def test_structured(self, clean_env, monkeypatch):
+        import re as _re
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "Structured")
+        config = Config.from_env()
+        assert config.scenario_format == "structured"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/blocklist-import/spamhaus-drop/c95"
+        assert bi.build_scenario(config, "Tor exit nodes") == "external/blocklist-import/tor-exit-nodes/c40"
+        assert bi.build_scenario(config, "custom_blocklist_0") == "external/blocklist-import/custom-blocklist-0/c50"
+        assert bi.build_scenario(config, None) == "external/blocklist-import/all-sources"
+        for source in bi.BLOCKLIST_SOURCES:
+            assert _re.match(self.SCENARIO_RE, bi.build_scenario(config, source.name)), source.name
+
+    def test_structured_prefix_and_overrides(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "structured")
+        monkeypatch.setenv("SCENARIO_PREFIX", "external/feeds/")
+        monkeypatch.setenv("FEED_CONFIDENCE", "tor-exit-nodes=10, Spamhaus DROP=99,custom_blocklist_0=150")
+        config = Config.from_env()
+        assert bi.build_scenario(config, "Tor exit nodes") == "external/feeds/tor-exit-nodes/c10"
+        assert bi.build_scenario(config, "Spamhaus DROP") == "external/feeds/spamhaus-drop/c99"
+        assert bi.build_scenario(config, "custom_blocklist_0") == "external/feeds/custom-blocklist-0/c100"
+
+    def test_invalid_format_falls_back_to_legacy(self, clean_env, monkeypatch):
+        monkeypatch.setattr(bi, "load_dotenv", lambda: None)
+        monkeypatch.setenv("SCENARIO_FORMAT", "json")
+        assert Config.from_env().scenario_format == "legacy"
+
+    def test_parse_feed_confidence_skips_malformed(self, logger):
+        parsed = bi.parse_feed_confidence("good=80,noequals,bad=abc,=5,neg=-3", logger)
+        assert parsed == {"good": 80, "neg": 0}
+
+    def test_add_decisions_uses_structured_scenario(self, lapi, session_mock):
+        config = Config(scenario_format="structured")
+        scenario = bi.build_scenario(config, "Feodo Tracker")
+        lapi._get_machine_headers = MagicMock(return_value={"Authorization": "Bearer x"})
+        resp = MagicMock(status_code=201)
+        resp.json.return_value = ["1"]
+        session_mock.post.return_value = resp
+        lapi.add_decisions(["1.2.3.4"], "24h", "r", "ban", "blocklist-import", scenario)
+        payload = session_mock.post.call_args.kwargs["json"][0]
+        assert payload["scenario"] == "external/blocklist-import/feodo-tracker/c95"
+        assert payload["decisions"][0]["scenario"] == "external/blocklist-import/feodo-tracker/c95"
