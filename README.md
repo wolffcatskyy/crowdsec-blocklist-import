@@ -292,9 +292,11 @@ Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier
 
 | Preset | Feeds | Use case |
 |--------|-------|----------|
-| `embedded` | Spamhaus DROP, abuse.ch (Feodo + URLhaus), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
+| `embedded` | Spamhaus DROP, abuse.ch (Feodo + URLhaus), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs and caps decisions at 15,000 by default (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
 | `server` | Everything except Firehol level3, VXVault, Tor, and dead feeds | Servers and VPSes; drops the feeds with false-positive history ([#26](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/26), [#38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38)) |
 | `max` | Everything (the pre-v3.9 behavior) | Maximum coverage |
+
+`PRESET=embedded` also sets `MAX_DECISIONS=15000` unless you set your own value (`MAX_DECISIONS=0` keeps it unlimited). Other presets leave `MAX_DECISIONS` unlimited.
 
 When neither `PRESET` nor `BLOCKLISTS_OPT_IN` is set, the legacy all-on default still applies, but every run logs a loud deprecation warning (and includes it in webhook notifications) ahead of the v4.0.0 flip. A run that ends up with zero enabled feeds exits non-zero instead of silently importing nothing.
 
