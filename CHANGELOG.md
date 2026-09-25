@@ -28,7 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Added
 
-- **Feed presets (`PRESET=`)** — `embedded` (Spamhaus DROP, abuse.ch Feodo + URLhaus, Emerging Threats, IPsum; stays around ~20K IPs, safe for UDM/UDR-class devices), `server` (the legacy set minus Firehol level3, VXVault, Tor, and dead feeds), and `max` (everything; the pre-v3.9 behavior). Presets set the default for every `ENABLE_*` switch; explicit values always win. Addresses #21, #26, #38, #98.
+- **Feed presets (`PRESET=`)** — `embedded` (Spamhaus DROP, abuse.ch Feodo + URLhaus, Emerging Threats, IPsum; stays around ~20K IPs, safe for UDM/UDR-class devices), `server` (the legacy set minus Firehol level3, VXVault, Tor, and dead feeds), and `max` (everything; the pre-v3.9 behavior). Presets set the default for every `ENABLE_*` switch; explicit values always win. `PRESET=embedded` also caps decisions at 15,000 (`MAX_DECISIONS`) unless you set your own value. Addresses #21, #26, #38, #98.
 - **Defaults-flip deprecation warning** — runs with neither `PRESET` nor `BLOCKLISTS_OPT_IN` set log a loud warning on every run and include it in webhook notifications. v4.0.0 will switch the no-config fallback to `PRESET=server`.
 - **Zero-feed guardrail** — a run with zero enabled feeds now exits non-zero with a clear message instead of silently importing nothing.
 - **Feed health metrics** — new per-source Prometheus gauges: `blocklist_import_source_last_success_timestamp`, `blocklist_import_source_entries`, `blocklist_import_source_unique_contribution`, and `blocklist_import_source_http_status`.
