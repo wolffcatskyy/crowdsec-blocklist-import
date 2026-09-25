@@ -31,7 +31,6 @@ GROUP_META = {
     "ENABLE_SCANNERS":          ("Scanners",           "Shodan, Censys, Maltrail scanner IPs"),
     "ENABLE_ABUSE_IPDB":        ("AbuseIPDB",          "99%+ confidence IPs (borestad mirror)"),
     "ENABLE_CYBERCRIME_TRACKER":("Cybercrime Tracker", "C2 IPs from cybercrime tracker"),
-    "ENABLE_MONTY_SECURITY_C2": ("Monty Security C2",  "Monty Security C2 tracker feed"),
     "ENABLE_VXVAULT":           ("VXVault",            "Malware hosting IPs"),
     "ENABLE_SENTINEL":          ("Sentinel",           "Turris Sentinel greylist"),
 }
@@ -42,7 +41,7 @@ ORDERED_ENABLE_KEYS = [
     "ENABLE_ABUSE_CH", "ENABLE_EMERGING_THREATS", "ENABLE_BINARY_DEFENSE",
     "ENABLE_BRUTEFORCE_BLOCKER", "ENABLE_DSHIELD", "ENABLE_CI_ARMY", "ENABLE_BOTVRIJ",
     "ENABLE_GREENSNOW", "ENABLE_STOPFORUMSPAM", "ENABLE_TOR", "ENABLE_SCANNERS",
-    "ENABLE_ABUSE_IPDB", "ENABLE_CYBERCRIME_TRACKER", "ENABLE_MONTY_SECURITY_C2",
+    "ENABLE_ABUSE_IPDB", "ENABLE_CYBERCRIME_TRACKER",
     "ENABLE_VXVAULT", "ENABLE_SENTINEL",
 ]
 
