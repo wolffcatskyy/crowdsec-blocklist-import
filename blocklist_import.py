@@ -57,7 +57,7 @@ except ImportError:
         """Stub if python-dotenv is not installed."""
         pass
 
-__version__ = "3.8.0"
+__version__ = "3.9.0"
 
 
 def get_lapi_user_agent() -> str:
@@ -172,6 +172,14 @@ class BlocklistSource:
     get_headers: Callable = field(default=None)
     get_params: Callable = field(default=None)
     get_can_import: Callable = field(default=None)
+    # Feed license metadata, surfaced by --list-sources so MSP/business users
+    # can filter feeds before enabling them. attribution_required and
+    # commercial_ok are tri-state: True / False / None (= unknown - verify
+    # with the feed provider before relying on it).
+    license: str = "unknown"
+    attribution_required: Optional[bool] = None
+    commercial_ok: Optional[bool] = None
+    license_note: str = ""
 
     def __post_init__(self):
         if self.get_headers is None:
@@ -187,12 +195,19 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
     BlocklistSource(
         name="IPsum",
+        license="The Unlicense",
+        attribution_required=False,
+        commercial_ok=True,
         url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
         enabled_key="enable_ipsum",
     ),
     # Spamhaus DROP
     BlocklistSource(
         name="Spamhaus DROP",
+        license="Spamhaus DROP terms",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="Free for any use including commercial; credit The Spamhaus Project and keep the date/copyright text with the data",
         url="https://www.spamhaus.org/drop/drop.txt",
         enabled_key="enable_spamhaus",
         comment_char=";",
@@ -201,96 +216,163 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # Blocklist.de
     BlocklistSource(
         name="Blocklist.de all",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
         url="https://lists.blocklist.de/lists/all.txt",
         enabled_key="enable_blocklist_de",
     ),
     BlocklistSource(
         name="Blocklist.de SSH",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
         url="https://lists.blocklist.de/lists/ssh.txt",
         enabled_key="enable_blocklist_de",
     ),
     BlocklistSource(
         name="Blocklist.de Apache",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
         url="https://lists.blocklist.de/lists/apache.txt",
         enabled_key="enable_blocklist_de",
     ),
     BlocklistSource(
         name="Blocklist.de mail",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
         url="https://lists.blocklist.de/lists/mail.txt",
         enabled_key="enable_blocklist_de",
     ),
     # Firehol
     BlocklistSource(
         name="Firehol level1",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
         enabled_key="enable_firehol_level1",
     ),
     BlocklistSource(
         name="Firehol level2",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
         enabled_key="enable_firehol_level2",
     ),
     # Abuse.ch
     BlocklistSource(
         name="Feodo Tracker",
+        license="abuse.ch community data (fair use)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Community feeds are free under fair use; commercial/for-profit use may require the paid abuse.ch commercial API",
         url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
         enabled_key="enable_abuse_ch",
     ),
     BlocklistSource(
         name="URLhaus",
+        license="abuse.ch community data (fair use)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Community feeds are free under fair use; commercial/for-profit use may require the paid abuse.ch commercial API",
         url="https://urlhaus.abuse.ch/downloads/text_online/",
         enabled_key="enable_abuse_ch",
     ),
     # Other sources
     BlocklistSource(
         name="Emerging Threats",
+        license="BSD (ET Open ruleset)",
+        attribution_required=True,
+        commercial_ok=True,
         url="https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
         enabled_key="enable_emerging_threats",
     ),
     BlocklistSource(
         name="Binary Defense",
+        license="ATIF terms (binarydefense.com)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Public use only; the feed may not be resold or used in products/services that charge fees",
         url="https://www.binarydefense.com/banlist.txt",
         enabled_key="enable_binary_defense",
     ),
     BlocklistSource(
         name="Bruteforce Blocker",
+        license="free (danger.rulez.sk)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://danger.rulez.sk/projects/bruteforceblocker/blist.php",
         enabled_key="enable_bruteforce_blocker",
     ),
     BlocklistSource(
         name="DShield",
+        license="CC BY-NC-SA 4.0 (SANS ISC)",
+        attribution_required=True,
+        commercial_ok=False,
+        license_note="ISC terms allow use protecting your own company network; resale prohibited; formal license is CC BY-NC-SA 4.0",
         url="https://www.dshield.org/block.txt",
         enabled_key="enable_dshield",
         extract_field=0,
     ),
     BlocklistSource(
         name="CI Army",
+        license="free (cinsscore.com)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://cinsscore.com/list/ci-badguys.txt",
         enabled_key="enable_ci_army",
     ),
     BlocklistSource(
         name="Botvrij",
+        license="free (botvrij.eu)",
+        attribution_required=None,
+        commercial_ok=True,
+        license_note="Provider states the data is free ('It is free!'); use at your own risk",
         url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
         enabled_key="enable_botvrij",
     ),
     BlocklistSource(
         name="GreenSnow",
+        license="free (greensnow.co)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://blocklist.greensnow.co/greensnow.txt",
         enabled_key="enable_greensnow",
     ),
     BlocklistSource(
         name="StopForumSpam",
+        license="Creative Commons (stopforumspam.com/license)",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="Use on commercial sites allowed; resale prohibited; license notice/link required on redistribution",
         url="https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt",
         enabled_key="enable_stopforumspam",
     ),
     # Tor exit nodes
     BlocklistSource(
         name="Tor exit nodes",
+        license="public data (Tor Project)",
+        attribution_required=False,
+        commercial_ok=True,
         url="https://check.torproject.org/torbulkexitlist",
         enabled_key="enable_tor",
     ),
     BlocklistSource(
         name="Tor (dan.me.uk)",
+        license="free (dan.me.uk)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="dan.me.uk asks users to respect the 30-minute rate limit",
         url="https://www.dan.me.uk/torlist/?exit",
         enabled_key="enable_tor",
         rate_limited=True,
@@ -298,24 +380,38 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # Scanners
     BlocklistSource(
         name="Shodan scanners",
+        license="no explicit license (community gist)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://gist.githubusercontent.com/jfqd/4ff7fa70950626a11832a4bc39451c1c/raw",
         enabled_key="enable_scanners",
     ),
     # AbuseIPDB 99% confidence (via borestad mirror)
     BlocklistSource(
         name="AbuseIPDB",
+        license="AbuseIPDB data via borestad mirror",
+        attribution_required=True,
+        commercial_ok=None,
+        license_note="Mirror credits AbuseIPDB; verify AbuseIPDB terms before commercial use or redistribution",
         url="https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4",
         enabled_key="enable_abuse_ipdb",
     ),
     # Cybercrime Tracker C2 (FireHOL mirror)
     BlocklistSource(
         name="Cybercrime Tracker",
+        license="free via FireHOL mirror (cybercrime-tracker.net)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
         enabled_key="enable_cybercrime_tracker",
     ),
     # Monty Security C2 Tracker
     BlocklistSource(
         name="Monty Security C2",
+        license="unknown (upstream archived)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="C2-Tracker repo archived and data files removed; feed disabled by default",
         url="https://raw.githubusercontent.com/montysecurity/C2-Tracker/main/data/all.txt",
         enabled_key="enable_monty_security_c2",
         # NOTE: upstream removed data/all.txt — disabled by default until a new URL is confirmed
@@ -323,6 +419,10 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # DShield Top Attackers
     BlocklistSource(
         name="DShield Top Attackers",
+        license="CC BY-NC-SA 4.0 (SANS ISC)",
+        attribution_required=True,
+        commercial_ok=False,
+        license_note="ISC terms allow use protecting your own company network; resale prohibited; formal license is CC BY-NC-SA 4.0",
         url="https://feeds.dshield.org/top10-2.txt",
         enabled_key="enable_dshield",
         extract_field=0,
@@ -330,6 +430,9 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # VXVault Malware (FireHOL mirror)
     BlocklistSource(
         name="VXVault",
+        license="free via FireHOL mirror (vxvault)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset",
         enabled_key="enable_vxvault",
     ),
@@ -337,23 +440,36 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # IPsum Level 4+ (higher confidence than existing level 3)
     BlocklistSource(
         name="IPsum level4",
+        license="The Unlicense",
+        attribution_required=False,
+        commercial_ok=True,
         url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt",
         enabled_key="enable_ipsum",
     ),
     # Firehol Level 3 (extended 30-day coverage)
     BlocklistSource(
         name="Firehol level3",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
         url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
         enabled_key="enable_firehol_level3",
     ),
     # Maltrail mass scanners
     BlocklistSource(
         name="Maltrail scanners",
+        license="MIT (maltrail)",
+        attribution_required=False,
+        commercial_ok=True,
         url="https://raw.githubusercontent.com/stamparm/maltrail/master/data/mass_scanner.txt",
         enabled_key="enable_scanners",
     ),
     BlocklistSource(
         name="Sentinel",
+        license="free (Turris Sentinel)",
+        attribution_required=None,
+        commercial_ok=None,
         url="https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
         enabled_key="enable_sentinel",
         extract_field=0,
@@ -361,6 +477,10 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     ),
     BlocklistSource(
         name="AbuseIPDB API",
+        license="AbuseIPDB API terms",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Subject to the AbuseIPDB account plan and terms of service",
         url="https://api.abuseipdb.com/api/v2/blacklist",
         enabled_key="enable_abuse_ipdb",
         rate_limited=True,
@@ -370,6 +490,10 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     ),
     BlocklistSource(
         name="Static scanner IPs (Censys)",
+        license="public scan data (Censys)",
+        attribution_required=None,
+        commercial_ok=True,
+        license_note="Censys scanner ranges are publicly documented",
         preset_values=[
             "192.35.168.0/23",
             "162.142.125.0/24",
@@ -379,6 +503,69 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         enabled_key="enable_scanners",
     ),
 ]
+
+# =============================================================================
+# Feed Presets (PRESET=)
+# =============================================================================
+# Presets set the *default* for each feed switch. Explicit ENABLE_* values
+# always win over the preset, preserving existing configurations. PRESET takes
+# precedence over BLOCKLISTS_OPT_IN when both are set.
+#
+# Membership is keyed on enabled_key (the same granularity as ENABLE_* vars).
+#
+#   embedded - small, high-confidence set safe for UDM/UDR-class devices
+#              (issue #21: ~123K decisions crashed the UniFi Network app on a
+#              UDM; embedded stays in the ~15K range)
+#   server   - the legacy default set minus feeds with false-positive history
+#              (#26/#38: VXVault and Firehol level3 both caught GitHub/CDN
+#              ranges) and the Tor exit list (a policy choice, not threat intel)
+#   max      - everything on; the pre-v3.9 behaviour
+#
+# v3.9 introduces presets WITHOUT changing defaults: when neither PRESET nor
+# BLOCKLISTS_OPT_IN is set, the legacy all-on default still applies and a loud
+# deprecation warning is logged (and sent to the configured webhook) on every
+# run. v4.0.0 will make PRESET=server the no-config fallback.
+
+PRESET_NAMES: tuple[str, ...] = ("embedded", "server", "max")
+
+_EMBEDDED_FEEDS: set[str] = {
+    "enable_spamhaus",          # Spamhaus DROP
+    "enable_abuse_ch",          # Feodo Tracker + URLhaus
+    "enable_emerging_threats",  # Emerging Threats compromised-ips
+    "enable_ipsum",             # IPsum level 3+ and 4+
+}
+
+# Feeds the server preset leaves off (every other feed stays on).
+_SERVER_DISABLED_FEEDS: set[str] = {
+    "enable_firehol_level3",    # 30-day aggregate; FP history (#26, #38)
+    "enable_vxvault",           # FP history (#26, #38)
+    "enable_tor",               # policy choice, not threat intel
+    "enable_monty_security_c2",  # upstream archived; feed URL removed
+}
+
+# Keys that stay off under every preset (dead upstream feeds). Explicit
+# ENABLE_* values can still turn them on.
+_ALWAYS_OFF_FEEDS: set[str] = {
+    "enable_monty_security_c2",
+}
+
+
+def preset_feed_default(preset: str, enabled_key: str) -> bool:
+    """Return the default for an enabled_key under the given preset."""
+    if enabled_key in _ALWAYS_OFF_FEEDS:
+        return False
+    if preset == "embedded":
+        return enabled_key in _EMBEDDED_FEEDS
+    if preset == "server":
+        return enabled_key not in _SERVER_DISABLED_FEEDS
+    # max: everything on
+    return True
+
+
+def presets_for_key(enabled_key: str) -> list[str]:
+    """Return the presets in which a feed is enabled by default."""
+    return [p for p in PRESET_NAMES if preset_feed_default(p, enabled_key)]
+
 
 # =============================================================================
 # Environment Variable Validation
@@ -574,6 +761,16 @@ class Config:
     # Maximum total decisions to submit (0 = unlimited)
     max_decisions: int = 0
 
+    # Feed selection preset: "", "embedded", "server", or "max" (env PRESET)
+    preset: str = ""
+    # True when neither PRESET nor BLOCKLISTS_OPT_IN is configured: the legacy
+    # all-on defaults still apply, but every run logs a loud deprecation
+    # warning (and notifies the configured webhook) ahead of the v4.0.0 flip.
+    opt_in_deprecation: bool = False
+
+    # Exit non-zero when any enabled feed fails to fetch (default: false)
+    fail_on_dead_feed: bool = False
+
     # Blocklist enables (all enabled by default)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
@@ -614,18 +811,38 @@ class Config:
                 return None
             return val.lower() in ("true", "1", "yes", "on")
 
-        # BLOCKLISTS_OPT_IN changes only the default for feed switches. Explicit
-        # ENABLE_* values always win, preserving existing configurations.
+        # Feed-default resolution order (explicit ENABLE_* values always win):
+        #   1. PRESET=embedded|server|max sets per-feed defaults
+        #   2. BLOCKLISTS_OPT_IN=true makes feeds opt-in (default off)
+        #   3. neither set: legacy all-on default + loud deprecation warning
+        #      (v4.0.0 will make PRESET=server the fallback instead)
+        preset = (os.getenv("PRESET") or "").strip().lower()
+        if preset and preset not in PRESET_NAMES:
+            raise EnvValidationError(
+                f"Invalid PRESET: '{preset}'\n"
+                f"  Expected one of: {', '.join(PRESET_NAMES)}"
+            )
+        blocklists_opt_in_set = os.getenv("BLOCKLISTS_OPT_IN") is not None
         blocklists_opt_in = get_bool("BLOCKLISTS_OPT_IN", False)
-        feed_default = not blocklists_opt_in
+        opt_in_deprecation = not preset and not blocklists_opt_in_set
+
+        def feed_default(key: str) -> bool:
+            if preset:
+                return preset_feed_default(preset, key)
+            return not blocklists_opt_in
 
         # Firehol master switch + optional per-level overrides.
-        # Each ENABLE_FIREHOL_LEVELn falls back to the master ENABLE_FIREHOL
-        # when unset, preserving the original all-or-nothing behaviour.
-        firehol_master = get_bool("ENABLE_FIREHOL", feed_default)
+        # An explicitly-set master ENABLE_FIREHOL still governs every unset
+        # level; otherwise each level takes its own preset/opt-in default
+        # (so PRESET=server can disable level3 while keeping levels 1-2).
+        firehol_master_set = os.getenv("ENABLE_FIREHOL") is not None
+        firehol_master = get_bool("ENABLE_FIREHOL", feed_default("enable_firehol"))
         fh_l1 = get_bool_or_none("ENABLE_FIREHOL_LEVEL1")
         fh_l2 = get_bool_or_none("ENABLE_FIREHOL_LEVEL2")
         fh_l3 = get_bool_or_none("ENABLE_FIREHOL_LEVEL3")
+        fh_l1_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level1")
+        fh_l2_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level2")
+        fh_l3_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level3")
 
         return cls(
             lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
@@ -670,41 +887,54 @@ class Config:
             abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
             consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
             max_decisions=int(os.getenv("MAX_DECISIONS", "0")),
-            enable_ipsum=get_bool("ENABLE_IPSUM", feed_default),
-            enable_spamhaus=get_bool("ENABLE_SPAMHAUS", feed_default),
-            enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE", feed_default),
+            preset=preset,
+            opt_in_deprecation=opt_in_deprecation,
+            fail_on_dead_feed=get_bool("FAIL_ON_DEAD_FEED", False),
+            enable_ipsum=get_bool("ENABLE_IPSUM", feed_default("enable_ipsum")),
+            enable_spamhaus=get_bool("ENABLE_SPAMHAUS", feed_default("enable_spamhaus")),
+            enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE", feed_default("enable_blocklist_de")),
             enable_firehol=firehol_master,
-            enable_firehol_level1=fh_l1 if fh_l1 is not None else firehol_master,
-            enable_firehol_level2=fh_l2 if fh_l2 is not None else firehol_master,
-            enable_firehol_level3=fh_l3 if fh_l3 is not None else firehol_master,
-            enable_abuse_ch=get_bool("ENABLE_ABUSE_CH", feed_default),
-            enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS", feed_default),
-            enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE", feed_default),
-            enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER", feed_default),
-            enable_dshield=get_bool("ENABLE_DSHIELD", feed_default),
-            enable_ci_army=get_bool("ENABLE_CI_ARMY", feed_default),
-            enable_botvrij=get_bool("ENABLE_BOTVRIJ", feed_default),
-            enable_greensnow=get_bool("ENABLE_GREENSNOW", feed_default),
-            enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM", feed_default),
-            enable_tor=get_bool("ENABLE_TOR", feed_default),
-            enable_scanners=get_bool("ENABLE_SCANNERS", feed_default),
-            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default),
-            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default),
+            enable_firehol_level1=fh_l1 if fh_l1 is not None else fh_l1_default,
+            enable_firehol_level2=fh_l2 if fh_l2 is not None else fh_l2_default,
+            enable_firehol_level3=fh_l3 if fh_l3 is not None else fh_l3_default,
+            enable_abuse_ch=get_bool("ENABLE_ABUSE_CH", feed_default("enable_abuse_ch")),
+            enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS", feed_default("enable_emerging_threats")),
+            enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE", feed_default("enable_binary_defense")),
+            enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER", feed_default("enable_bruteforce_blocker")),
+            enable_dshield=get_bool("ENABLE_DSHIELD", feed_default("enable_dshield")),
+            enable_ci_army=get_bool("ENABLE_CI_ARMY", feed_default("enable_ci_army")),
+            enable_botvrij=get_bool("ENABLE_BOTVRIJ", feed_default("enable_botvrij")),
+            enable_greensnow=get_bool("ENABLE_GREENSNOW", feed_default("enable_greensnow")),
+            enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM", feed_default("enable_stopforumspam")),
+            enable_tor=get_bool("ENABLE_TOR", feed_default("enable_tor")),
+            enable_scanners=get_bool("ENABLE_SCANNERS", feed_default("enable_scanners")),
+            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default("enable_abuse_ipdb")),
+            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default("enable_cybercrime_tracker")),
             enable_monty_security_c2=get_bool("ENABLE_MONTY_SECURITY_C2", False),
-            enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default),
-            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default)
+            enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default("enable_vxvault")),
+            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel"))
         )
 
 
+def _tristate(value: Optional[bool]) -> str:
+    """Render a tri-state license field for display."""
+    return {True: "yes", False: "no"}.get(value, "unknown")
+
+
 def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
-    """Print a formatted list of all available blocklist sources."""
+    """Print a formatted list of all available blocklist sources.
+
+    Includes preset membership and license metadata (license,
+    attribution_required, commercial_ok) so MSP/business users can filter
+    feeds by licensing terms before enabling them.
+    """
     # Group sources by their enable key
-    sources_by_key: dict[str, list[str]] = {}
+    sources_by_key: dict[str, list[BlocklistSource]] = {}
     for source in BLOCKLIST_SOURCES:
         env_var = source.enabled_key.upper()
         if env_var not in sources_by_key:
             sources_by_key[env_var] = []
-        sources_by_key[env_var].append(source.name)
+        sources_by_key[env_var].append(source)
 
     total = sum(len(names) for names in sources_by_key.values())
 
@@ -712,11 +942,15 @@ def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
         # Docs-ready table; printed without log decoration so the output can be
         # piped straight into documentation:
         #   python blocklist_import.py --list-sources --format md > docs/feeds.md
-        print("| Feed | Enable variable |")
-        print("|------|-----------------|")
+        print("| Feed | Enable variable | Presets | License | Attribution required | Commercial OK |")
+        print("|------|-----------------|---------|---------|----------------------|---------------|")
         for env_var in sorted(sources_by_key.keys()):
             for source in sources_by_key[env_var]:
-                print(f"| {source} | `{env_var}` |")
+                presets = ",".join(presets_for_key(source.enabled_key)) or "none"
+                print(
+                    f"| {source.name} | `{env_var}` | {presets} | {source.license} | "
+                    f"{_tristate(source.attribution_required)} | {_tristate(source.commercial_ok)} |"
+                )
         print()
         print(f"**{total} feeds across {len(sources_by_key)} enable variables.**")
         return
@@ -732,7 +966,16 @@ def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
 
         logger.info(f"  {env_var} ({status}):")
         for source in sources:
-            logger.info(f"    - {source}")
+            presets = ",".join(presets_for_key(source.enabled_key)) or "none"
+            logger.info(f"    - {source.name}")
+            logger.info(f"        presets: {presets}")
+            logger.info(
+                f"        license: {source.license} | "
+                f"attribution_required: {_tristate(source.attribution_required)} | "
+                f"commercial_ok: {_tristate(source.commercial_ok)}"
+            )
+            if source.license_note:
+                logger.info(f"        note: {source.license_note}")
 
     logger.info("")
 
@@ -961,21 +1204,61 @@ class MetricsCollector:
             registry=self.registry,
         )
 
+        # Feed-health gauges (v3.9): last success, raw entry count, unique
+        # contribution, and HTTP status per source.
+        self.source_last_success_timestamp = Gauge(  # type: ignore
+            "blocklist_import_source_last_success_timestamp",
+            "Unix timestamp of each source's last successful fetch",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_entries = Gauge(  # type: ignore
+            "blocklist_import_source_entries",
+            "Raw number of entries each source published in the last run",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_unique_contribution = Gauge(  # type: ignore
+            "blocklist_import_source_unique_contribution",
+            "New unique IPs each source contributed in the last run "
+            "(after dedup against existing decisions and earlier sources)",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_http_status = Gauge(  # type: ignore
+            "blocklist_import_source_http_status",
+            "HTTP status code of each source's last fetch "
+            "(0 = transport-level failure, -1 = no HTTP request made)",
+            ["source"],
+            registry=self.registry,
+        )
+
     # ------------------------------------------------------------------
     # Per-source helpers — called directly from fetch_blocklist / run_import
     # ------------------------------------------------------------------
 
-    def record_source_success(self, source_name: str, new_ip_count: int, refreshed_ip_count: int, duration: float) -> None:
-        """Record a successful source fetch."""
+    def record_source_success(self, source_name: str, new_ip_count: int, refreshed_ip_count: int, duration: float,
+                              http_status: Optional[int] = None, entry_count: int = 0) -> None:
+        """Record a successful source fetch, including feed-health gauges."""
         if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
             return
         self.source_status.labels(source=source_name).set(1)
         self.source_ips.labels(source=source_name).set(new_ip_count)
         self.source_refreshed_ips.labels(source=source_name).set(refreshed_ip_count)
         self.source_duration_seconds.labels(source=source_name).set(duration)
+        self.source_last_success_timestamp.labels(source=source_name).set(time.time())
+        self.source_entries.labels(source=source_name).set(entry_count)
+        self.source_unique_contribution.labels(source=source_name).set(new_ip_count)
+        self.source_http_status.labels(source=source_name).set(
+            http_status if http_status is not None else -1
+        )
 
     def record_source_failure(self, source_name: str, error_type: str,
-                              exc: Optional[Exception], duration: float) -> None:
+                              exc: Optional[Exception], duration: float,
+                              http_status: Optional[int] = None) -> None:
         """
         Record a failed source fetch.
 
@@ -988,6 +1271,11 @@ class MetricsCollector:
         self.source_ips.labels(source=source_name).set(0)
         self.source_refreshed_ips.labels(source=source_name).set(0)
         self.source_duration_seconds.labels(source=source_name).set(duration)
+        self.source_entries.labels(source=source_name).set(0)
+        self.source_unique_contribution.labels(source=source_name).set(0)
+        self.source_http_status.labels(source=source_name).set(
+            http_status if http_status is not None else 0
+        )
         short_msg = sanitize_error_message(exc) if isinstance(exc, Exception) else (str(exc)[:64] if exc else "unknown")
         self.errors_total.labels(
             error_type=error_type,
@@ -1557,6 +1845,11 @@ class FetchResult:
     # original exception (sanitized before use as label)
     error_exception: Optional[Exception] = None
     parse_errors: dict[str, int] = field(default_factory=dict[str, int])
+    # Feed health (v3.9): HTTP status of the fetch (None when no HTTP request
+    # completed, e.g. preset values or a transport-level failure) and the raw
+    # entry count published by the feed.
+    http_status: Optional[int] = None
+    entry_count: int = 0
 
 
 def log_separator(logger: logging.Logger):
@@ -1693,6 +1986,8 @@ def fetch_blocklist(
             refreshed_unique_ip_count=refreshed_ip_cnt,
             duration=duration,
             parse_errors=parse_errors,
+            http_status=response.status_code,
+            entry_count=total_raw_ip_cnt,
         )
 
     except Exception as e:
@@ -1701,12 +1996,16 @@ def fetch_blocklist(
         else:
             logger.error(f"{source.name}: unexpected error ({e})")
         duration = time.time() - t0
+        http_status = None
+        if isinstance(e, requests.HTTPError) and e.response is not None:
+            http_status = e.response.status_code
         return new_ips, refresh_ips, FetchResult(
             source=source,
             success=False,
             duration=duration,
             error_type="fetch",
             error_exception=e,
+            http_status=http_status,
         )
 
 
@@ -2138,6 +2437,9 @@ class ImportStats:
     imported_failed: int = 0
     existing_skipped: int = 0
     duration_seconds: float = 0.0
+    # Set when the run was refused because zero feeds are enabled (v3.9
+    # guardrail): an empty import must never look like success.
+    fatal_no_feeds: bool = False
 
 
 def read_secret_file(file_path: str) -> str:
@@ -2217,6 +2519,25 @@ def create_lapi_client_from_config(
     )
 
 
+OPT_IN_DEPRECATION_MESSAGE = (
+    "DEPRECATION: no feed-selection config found (neither PRESET nor "
+    "BLOCKLISTS_OPT_IN is set). Today's default still enables all feeds, but "
+    "v4.0.0 will flip the no-config fallback to PRESET=server (a conservative, "
+    "high-confidence set). Set PRESET=max to keep the current behaviour, "
+    "PRESET=embedded for UDM/UDR-class devices, or enable feeds explicitly "
+    "with ENABLE_* variables. See --list-sources."
+)
+
+
+def warn_opt_in_deprecation(config: Config, logger: logging.Logger) -> None:
+    """Log the loud pre-v4.0 deprecation warning when defaults are implicit."""
+    if not config.opt_in_deprecation:
+        return
+    logger.warning("!" * 78)
+    logger.warning(OPT_IN_DEPRECATION_MESSAGE)
+    logger.warning("!" * 78)
+
+
 def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     """
     Run the blocklist import.
@@ -2236,6 +2557,11 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         logger.info("DRY RUN MODE - no changes will be made")
     if config.max_decisions > 0:
         logger.info(f"MAX_DECISIONS: {config.max_decisions} (will cap total decisions)")
+    if config.preset:
+        logger.info(f"Feed preset: {config.preset}")
+
+    # Loud, every-run deprecation warning ahead of the v4.0.0 defaults flip
+    warn_opt_in_deprecation(config, logger)
 
     # Create HTTP session with retry logic
     session = create_http_session(config.max_retries)
@@ -2316,6 +2642,20 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         for i, url in enumerate(config.custom_block_lists):
             if url:
                 enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, enabled_key="custom_blocklists"))
+
+    # Guardrail (v3.9): an empty import must never look like success. A run
+    # with zero enabled feeds exits non-zero with a clear message instead of
+    # silently importing nothing (protection would quietly drop for
+    # auto-updaters after the v4.0.0 defaults flip).
+    if not enabled_sources:
+        logger.error(
+            "No blocklist feeds are enabled - refusing to run with an empty "
+            "feed set. Set PRESET=embedded|server|max, enable feeds with "
+            "ENABLE_*=true, or add CUSTOM_BLOCKLISTS. See --list-sources."
+        )
+        stats.fatal_no_feeds = True
+        stats.duration_seconds = time.time() - start_time
+        return stats
 
     logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
 
@@ -2416,6 +2756,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                 refreshed_unique_ip_count=len(refreshed_ips),
                 duration=time.time() - t0,
                 parse_errors={},
+                entry_count=len(source.preset_values),
             )
         else:
             # Fetch blocklist and get results
@@ -2439,6 +2780,8 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                     new_ip_count=result.new_unique_ip_count,
                     refreshed_ip_count=result.refreshed_unique_ip_count,
                     duration=result.duration,
+                    http_status=result.http_status,
+                    entry_count=result.entry_count,
                 )
                 if result.parse_errors:
                     metrics.record_parse_errors(source.name, result.parse_errors)
@@ -2448,6 +2791,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
                     error_type=result.error_type or "fetch",
                     exc=result.error_exception,
                     duration=result.duration,
+                    http_status=result.http_status,
                 )
 
         if result and result.success:
@@ -2550,6 +2894,12 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         metrics.update_aggregates(stats, len(enabled_sources))
         metrics.push()
 
+    if config.fail_on_dead_feed and stats.sources_failed > 0:
+        logger.error(
+            f"FAIL_ON_DEAD_FEED is set and {stats.sources_failed} enabled "
+            "feed(s) failed - this run is treated as failed"
+        )
+
     # Log summary
     log_separator(logger)
     logger.info(
@@ -2609,12 +2959,13 @@ def send_webhook(config: Config, stats: ImportStats, logger: logging.Logger) -> 
         return
 
     try:
+        deprecation = OPT_IN_DEPRECATION_MESSAGE if config.opt_in_deprecation else ""
         if config.webhook_type == "discord":
-            payload = _format_discord_webhook(stats)
+            payload = _format_discord_webhook(stats, deprecation)
         elif config.webhook_type == "slack":
-            payload = _format_slack_webhook(stats)
+            payload = _format_slack_webhook(stats, deprecation)
         else:
-            payload = _format_generic_webhook(stats)
+            payload = _format_generic_webhook(stats, deprecation)
 
         response = requests.post(
             config.webhook_url,
@@ -2631,7 +2982,7 @@ def send_webhook(config: Config, stats: ImportStats, logger: logging.Logger) -> 
         logger.warning(f"Webhook failed: {e}")
 
 
-def _format_discord_webhook(stats: ImportStats) -> dict[str, list[dict[str, str | int | list[dict[str, str | bool]] | dict[str, str]]]]:
+def _format_discord_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, list[dict[str, str | int | list[dict[str, str | bool]] | dict[str, str]]]]:
     """Format stats as a Discord embed."""
     color = 0x2ECC71 if stats.imported_failed == 0 else 0xE74C3C
     fields: list[dict[str, str | bool]] = [
@@ -2642,6 +2993,8 @@ def _format_discord_webhook(stats: ImportStats) -> dict[str, list[dict[str, str 
     ]
     if stats.imported_failed > 0:
         fields.append({"name": "Failed", "value": str(stats.imported_failed), "inline": True})
+    if deprecation:
+        fields.append({"name": "Deprecation warning", "value": deprecation[:1024], "inline": False})
 
     return {
         "embeds": [{
@@ -2653,7 +3006,7 @@ def _format_discord_webhook(stats: ImportStats) -> dict[str, list[dict[str, str 
     }
 
 
-def _format_slack_webhook(stats: ImportStats) -> dict[str, str]:
+def _format_slack_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, str]:
     """Format stats as a Slack message."""
     emoji = ":white_check_mark:" if stats.imported_failed == 0 else ":warning:"
     text = (
@@ -2664,12 +3017,14 @@ def _format_slack_webhook(stats: ImportStats) -> dict[str, str]:
     )
     if stats.imported_failed > 0:
         text += f"\nFailed: {stats.imported_failed}"
+    if deprecation:
+        text += f"\n:warning: {deprecation}"
     return {"text": text}
 
 
-def _format_generic_webhook(stats: ImportStats) -> dict[str, str | int | float]:
+def _format_generic_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, str | int | float]:
     """Format stats as a generic JSON payload."""
-    return {
+    payload: dict[str, str | int | float] = {
         "event": "blocklist_import_complete",
         "version": __version__,
         "sources_ok": stats.sources_ok,
@@ -2679,6 +3034,9 @@ def _format_generic_webhook(stats: ImportStats) -> dict[str, str | int | float]:
         "imported_failed": stats.imported_failed,
         "duration_seconds": round(stats.duration_seconds, 1),
     }
+    if deprecation:
+        payload["deprecation"] = deprecation
+    return payload
 
 
 # =============================================================================
@@ -2732,6 +3090,11 @@ Environment Variables:
   WEBHOOK_TYPE             Webhook format: generic, discord, slack (default: generic)
   ABUSEIPDB_API_KEY        AbuseIPDB API key for direct blacklist queries
   ABUSEIPDB_MIN_CONFIDENCE Minimum confidence score 1-100 (default: 90)
+
+  PRESET                   Feed preset: embedded, server, or max. Sets the default
+                           for every ENABLE_* switch; explicit ENABLE_* values win.
+  BLOCKLISTS_OPT_IN        Set to true to make unset feeds default to disabled
+  FAIL_ON_DEAD_FEED        Set to true to exit non-zero when any enabled feed fails
 
   ENABLE_IPSUM             Enable IPsum blocklist (default: true)
   ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
@@ -2891,7 +3254,11 @@ def main() -> int:
         return run_setup()
 
     # Load config from environment
-    config = Config.from_env()
+    try:
+        config = Config.from_env()
+    except EnvValidationError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
 
     # Override with CLI args
     if args.dry_run:
@@ -2975,10 +3342,17 @@ def _run_once(config: Config, logger: logging.Logger) -> int:
     try:
         stats = run_import(config, logger)
 
+        # Zero enabled feeds is a hard failure (guardrail: an empty import
+        # must never look like success)
+        if stats.fatal_no_feeds:
+            return 1
         # Exit with error if import failed
         if stats.sources_ok == 0:
             return 1
         if stats.imported_failed > 0 and stats.imported_ok == 0:
+            return 1
+        # FAIL_ON_DEAD_FEED: any failed enabled feed fails the run
+        if config.fail_on_dead_feed and stats.sources_failed > 0:
             return 1
         return 0
 
@@ -3058,7 +3432,12 @@ def _run_daemon(config: Config, logger: logging.Logger) -> int:
             logger.info(f"Starting import run #{run_number}")
             try:
                 stats = run_import(config, logger)
-                if stats.sources_ok == 0:
+                if stats.fatal_no_feeds:
+                    logger.error(
+                        "No feeds enabled - the daemon keeps running but nothing "
+                        "is imported until the configuration is fixed"
+                    )
+                elif stats.sources_ok == 0:
                     logger.warning("No sources succeeded — will retry next interval")
             except Exception as e:
                 logger.error(f"Import run #{run_number} failed: {e}")

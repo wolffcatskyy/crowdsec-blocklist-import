@@ -24,6 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **`STATE.md`** — Stale generated repository-state report (dated 2026-02-22, claimed v3.4.0 and 36 feeds) that contradicted current docs.
 
 ---
+## [3.9.0] — 2026-09-24
+
+### Added
+
+- **Feed presets (`PRESET=`)** — `embedded` (Spamhaus DROP, abuse.ch Feodo + URLhaus, Emerging Threats, IPsum; stays around ~20K IPs, safe for UDM/UDR-class devices), `server` (the legacy set minus Firehol level3, VXVault, Tor, and dead feeds), and `max` (everything; the pre-v3.9 behavior). Presets set the default for every `ENABLE_*` switch; explicit values always win. Addresses #21, #26, #38, #98.
+- **Defaults-flip deprecation warning** — runs with neither `PRESET` nor `BLOCKLISTS_OPT_IN` set log a loud warning on every run and include it in webhook notifications. v4.0.0 will switch the no-config fallback to `PRESET=server`.
+- **Zero-feed guardrail** — a run with zero enabled feeds now exits non-zero with a clear message instead of silently importing nothing.
+- **Feed health metrics** — new per-source Prometheus gauges: `blocklist_import_source_last_success_timestamp`, `blocklist_import_source_entries`, `blocklist_import_source_unique_contribution`, and `blocklist_import_source_http_status`.
+- **`FAIL_ON_DEAD_FEED`** — set to `true` to exit non-zero when any enabled feed fails to fetch.
+- **Per-feed license metadata** — `--list-sources` now reports each feed's license plus `attribution_required` and `commercial_ok` flags (checked against provider terms) so MSP and business users can filter feeds before enabling them.
+
+### Notes
+
+- **No default behavior changes in this release.** With no configuration, all feeds stay enabled exactly as before; the behavior change lands in v4.0.0. Set `PRESET=max` now to keep it, or `PRESET=server` / `PRESET=embedded` to move early.
+
+
+---
 ## [3.8.0] — 2026-09-22
 
 ### Added

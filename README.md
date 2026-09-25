@@ -5,6 +5,9 @@
 
 **Import 32 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
 
+> [!WARNING]
+> **Defaults are changing in v4.0.0.** Today, with no configuration, every feed is enabled. v4.0.0 will switch the no-config fallback to `PRESET=server` (a conservative, high-confidence set). Set `PRESET=max` to keep the current behavior, or `PRESET=embedded` for UDM/UDR-class devices. v3.9 adds `PRESET=`, per-feed health metrics, `FAIL_ON_DEAD_FEED`, and per-feed license metadata in `--list-sources` - see the [changelog](CHANGELOG.md).
+
 [![GitHub Stars](https://img.shields.io/github/stars/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/stargazers)
 [![CI](https://img.shields.io/github/actions/workflow/status/wolffcatskyy/crowdsec-blocklist-import/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&label=release)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/releases/latest)
@@ -283,6 +286,22 @@ For higher rate limits and fresher data, you can optionally configure a **direct
 
 Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
 
+### Feed Presets
+
+`PRESET` picks a ready-made feed set: it sets the default for every `ENABLE_*` switch, and explicit `ENABLE_*` values always win.
+
+| Preset | Feeds | Use case |
+|--------|-------|----------|
+| `embedded` | Spamhaus DROP, abuse.ch (Feodo + URLhaus), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
+| `server` | Everything except Firehol level3, VXVault, Tor, and dead feeds | Servers and VPSes; drops the feeds with false-positive history ([#26](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/26), [#38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38)) |
+| `max` | Everything (the pre-v3.9 behavior) | Maximum coverage |
+
+When neither `PRESET` nor `BLOCKLISTS_OPT_IN` is set, the legacy all-on default still applies, but every run logs a loud deprecation warning (and includes it in webhook notifications) ahead of the v4.0.0 flip. A run that ends up with zero enabled feeds exits non-zero instead of silently importing nothing.
+
+Set `FAIL_ON_DEAD_FEED=true` to exit non-zero when any enabled feed fails to fetch.
+
+Run `--list-sources` to see every feed with its preset membership and license metadata (`license`, `attribution_required`, `commercial_ok`).
+
 ### Selective Blocklists
 
 All blocklists are enabled by default. Disable feeds you don't need:
@@ -550,6 +569,7 @@ Metrics tracked:
 - Deduplicated entries skipped
 - Failed imports per source
 - Import duration per run
+- Feed health per source (v3.9): last successful fetch timestamp, raw entry count, unique IP contribution, and HTTP status
 
 ### Grafana Dashboard
 

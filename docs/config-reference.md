@@ -167,6 +167,10 @@ Each blocklist source can be individually enabled or disabled. By default, block
 | Variable | Description | Default |
 |----------|-------------|---------|
 | BLOCKLISTS_OPT_IN | Safe opt-in mode: unset blocklist switches default to disabled | `false` |
+| PRESET | Feed preset: `embedded` (high-confidence ~20K-IP set for UDM/UDR-class devices), `server` (legacy set minus false-positive-prone feeds), or `max` (everything). Sets the default for every `ENABLE_*` switch; explicit values win. Takes precedence over BLOCKLISTS_OPT_IN | *(unset)* |
+| FAIL_ON_DEAD_FEED | Exit non-zero when any enabled feed fails to fetch | `false` |
+
+**Defaults deprecation (v3.9):** with neither `PRESET` nor `BLOCKLISTS_OPT_IN` set, the legacy all-on default still applies but every run logs a loud deprecation warning (also sent to the configured webhook). v4.0.0 will switch the no-config fallback to `PRESET=server`. Runs with zero enabled feeds exit non-zero.
 
 | Variable | Description | Default |
 |----------|-------------|---------|

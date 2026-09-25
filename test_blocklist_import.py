@@ -42,6 +42,7 @@ import blocklist_import as bi
 from blocklist_import import (
     Allowlist,
     BlocklistSource,
+    EnvValidationError,
     Config,
     CrowdSecLAPI,
     FetchResult,
@@ -86,7 +87,8 @@ def clean_env(monkeypatch):
                                                                "METRICS_", "INTERVAL",
                                                                "RUN_ON_START", "WEBHOOK_",
                                                                "ABUSEIPDB_", "ALLOWLIST",
-                                                               "CUSTOM_"))]
+                                                               "CUSTOM_", "PRESET",
+                                                               "BLOCKLISTS_", "FAIL_ON_"))]
     for k in keys_to_remove:
         monkeypatch.delenv(k, raising=False)
     yield monkeypatch
@@ -2388,3 +2390,342 @@ class TestMaxDecisionsCap:
         finally:
             for p in patchers:
                 p.stop()
+
+
+# ===========================================================================
+# 13. PRESET= feed presets (v3.9)
+# ===========================================================================
+
+
+class TestPresets:
+    def test_embedded_enables_only_high_confidence(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        cfg = Config.from_env()
+        assert cfg.preset == "embedded"
+        # the high-confidence set
+        assert cfg.enable_spamhaus is True
+        assert cfg.enable_abuse_ch is True
+        assert cfg.enable_emerging_threats is True
+        assert cfg.enable_ipsum is True
+        # everything else off
+        assert cfg.enable_vxvault is False
+        assert cfg.enable_blocklist_de is False
+        assert cfg.enable_tor is False
+        assert cfg.enable_dshield is False
+        assert cfg.enable_firehol_level1 is False
+
+    def test_server_disables_fp_prone_feeds(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "server")
+        cfg = Config.from_env()
+        # off: FP history (#26/#38), 30-day aggregate, Tor policy, dead upstream
+        assert cfg.enable_firehol_level3 is False
+        assert cfg.enable_vxvault is False
+        assert cfg.enable_tor is False
+        assert cfg.enable_monty_security_c2 is False
+        # the rest stays on
+        assert cfg.enable_ipsum is True
+        assert cfg.enable_blocklist_de is True
+        assert cfg.enable_firehol_level1 is True
+        assert cfg.enable_firehol_level2 is True
+
+    def test_max_keeps_legacy_all_on(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "max")
+        cfg = Config.from_env()
+        assert cfg.enable_vxvault is True
+        assert cfg.enable_tor is True
+        assert cfg.enable_firehol_level3 is True
+        # dead upstream feed stays off even in max
+        assert cfg.enable_monty_security_c2 is False
+
+    def test_explicit_enable_overrides_preset(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("ENABLE_VXVAULT", "true")
+        monkeypatch.setenv("ENABLE_SPAMHAUS", "false")
+        cfg = Config.from_env()
+        assert cfg.enable_vxvault is True
+        assert cfg.enable_spamhaus is False
+
+    def test_preset_takes_precedence_over_blocklists_opt_in(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "server")
+        monkeypatch.setenv("BLOCKLISTS_OPT_IN", "true")
+        cfg = Config.from_env()
+        # the preset decides defaults even though opt-in would disable all
+        assert cfg.enable_blocklist_de is True
+        assert cfg.enable_vxvault is False
+
+    def test_firehol_master_overrides_preset_levels(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "server")
+        monkeypatch.setenv("ENABLE_FIREHOL", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_firehol_level3 is True
+
+    def test_firehol_master_false_overrides_preset_levels(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "server")
+        monkeypatch.setenv("ENABLE_FIREHOL", "false")
+        cfg = Config.from_env()
+        assert cfg.enable_firehol_level1 is False
+        assert cfg.enable_firehol_level2 is False
+
+    def test_invalid_preset_rejected(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "bogus")
+        with pytest.raises(EnvValidationError):
+            Config.from_env()
+
+    def test_preset_case_insensitive(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "Embedded")
+        cfg = Config.from_env()
+        assert cfg.preset == "embedded"
+        assert cfg.enable_spamhaus is True
+
+    def test_no_preset_keeps_legacy_defaults(self, clean_env):
+        cfg = Config.from_env()
+        assert cfg.preset == ""
+        assert cfg.enable_ipsum is True
+        assert cfg.enable_vxvault is True
+
+
+class TestPresetHelpers:
+    def test_presets_for_key(self):
+        assert bi.presets_for_key("enable_spamhaus") == ["embedded", "server", "max"]
+        assert bi.presets_for_key("enable_vxvault") == ["max"]
+        assert bi.presets_for_key("enable_tor") == ["max"]
+        assert bi.presets_for_key("enable_monty_security_c2") == []
+
+    def test_preset_feed_default_unknown_key(self):
+        # unknown future feeds: conservative under embedded, on elsewhere
+        assert bi.preset_feed_default("embedded", "enable_future_feed") is False
+        assert bi.preset_feed_default("server", "enable_future_feed") is True
+        assert bi.preset_feed_default("max", "enable_future_feed") is True
+
+
+# ===========================================================================
+# 14. Opt-in deprecation warning (v3.9, ahead of the v4.0 defaults flip)
+# ===========================================================================
+
+
+class TestOptInDeprecation:
+    def test_flag_set_when_neither_configured(self, clean_env):
+        cfg = Config.from_env()
+        assert cfg.opt_in_deprecation is True
+
+    def test_flag_clear_with_opt_in_set(self, clean_env, monkeypatch):
+        monkeypatch.setenv("BLOCKLISTS_OPT_IN", "false")
+        cfg = Config.from_env()
+        assert cfg.opt_in_deprecation is False
+
+    def test_flag_clear_with_preset_set(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "server")
+        cfg = Config.from_env()
+        assert cfg.opt_in_deprecation is False
+
+    def test_warning_logged_when_implicit(self, clean_env, caplog):
+        cfg = Config.from_env()
+        with caplog.at_level(logging.WARNING, logger="blocklist-import"):
+            bi.warn_opt_in_deprecation(cfg, logging.getLogger("blocklist-import"))
+        assert "DEPRECATION" in caplog.text
+        assert "PRESET=max" in caplog.text
+
+    def test_no_warning_when_configured(self, clean_env, monkeypatch, caplog):
+        monkeypatch.setenv("PRESET", "max")
+        cfg = Config.from_env()
+        with caplog.at_level(logging.WARNING, logger="blocklist-import"):
+            bi.warn_opt_in_deprecation(cfg, logging.getLogger("blocklist-import"))
+        assert "DEPRECATION" not in caplog.text
+
+
+class TestWebhookDeprecation:
+    def test_generic_includes_deprecation(self):
+        payload = _format_generic_webhook(ImportStats(), "DEPRECATION: test")
+        assert payload["deprecation"] == "DEPRECATION: test"
+
+    def test_generic_omits_deprecation_by_default(self):
+        payload = _format_generic_webhook(ImportStats())
+        assert "deprecation" not in payload
+
+    def test_slack_includes_deprecation(self):
+        payload = _format_slack_webhook(ImportStats(), "DEPRECATION: test")
+        assert "DEPRECATION: test" in payload["text"]
+
+    def test_discord_includes_deprecation(self):
+        payload = _format_discord_webhook(ImportStats(), "DEPRECATION: test")
+        fields = payload["embeds"][0]["fields"]
+        assert any(f["name"] == "Deprecation warning" and "DEPRECATION: test" in f["value"]
+                   for f in fields)
+
+
+# ===========================================================================
+# 15. Feed health: HTTP status + entry counts (v3.9)
+# ===========================================================================
+
+
+class TestFeedHealth:
+    def test_success_captures_http_status_and_entry_count(self, dummy_source, logger, session_mock):
+        resp = Mock()
+        resp.status_code = 200
+        resp.raise_for_status = Mock()
+        resp.iter_lines.return_value = [b"1.2.3.4", b"5.6.7.8"]
+        session_mock.get.return_value = resp
+        new_ips, refreshed_ips, result = fetch_blocklist(
+            session_mock, dummy_source, Config(), set(), [], [], Allowlist(), ImportStats(), logger)
+        assert result.success is True
+        assert result.http_status == 200
+        assert result.entry_count == 2
+
+    def test_http_error_captures_status_code(self, dummy_source, logger, session_mock):
+        import requests
+        err = requests.HTTPError("404 Not Found")
+        err.response = Mock(status_code=404)
+        session_mock.get.side_effect = err
+        new_ips, refreshed_ips, result = fetch_blocklist(
+            session_mock, dummy_source, Config(), set(), [], [], Allowlist(), ImportStats(), logger)
+        assert result.success is False
+        assert result.http_status == 404
+
+    def test_transport_error_has_no_status(self, dummy_source, logger, session_mock):
+        import requests
+        session_mock.get.side_effect = requests.ConnectionError("refused")
+        new_ips, refreshed_ips, result = fetch_blocklist(
+            session_mock, dummy_source, Config(), set(), [], [], Allowlist(), ImportStats(), logger)
+        assert result.success is False
+        assert result.http_status is None
+        assert result.entry_count == 0
+
+
+@pytest.mark.skipif(not PROMETHEUS_AVAILABLE, reason="prometheus_client not installed")
+class TestFeedHealthMetrics:
+    @pytest.fixture()
+    def metrics(self, logger):
+        from blocklist_import import MetricsCollector
+        return MetricsCollector(pushgateway_url="localhost:9091", logger=logger)
+
+    def test_success_sets_health_gauges(self, metrics):
+        metrics.record_source_success(
+            "Src", new_ip_count=5, refreshed_ip_count=2, duration=1.0,
+            http_status=200, entry_count=42)
+        assert metrics.source_last_success_timestamp.labels(source="Src")._value.get() > 0
+        assert metrics.source_entries.labels(source="Src")._value.get() == 42
+        assert metrics.source_unique_contribution.labels(source="Src")._value.get() == 5
+        assert metrics.source_http_status.labels(source="Src")._value.get() == 200
+
+    def test_preset_source_marks_no_http_request(self, metrics):
+        metrics.record_source_success("Src", new_ip_count=1, refreshed_ip_count=0,
+                                      duration=0.1, http_status=None, entry_count=4)
+        assert metrics.source_http_status.labels(source="Src")._value.get() == -1
+
+    def test_failure_sets_health_gauges(self, metrics):
+        metrics.record_source_failure("Src", error_type="fetch",
+                                      exc=Exception("boom"), duration=0.5,
+                                      http_status=503)
+        assert metrics.source_status.labels(source="Src")._value.get() == 0
+        assert metrics.source_http_status.labels(source="Src")._value.get() == 503
+        assert metrics.source_entries.labels(source="Src")._value.get() == 0
+        assert metrics.source_unique_contribution.labels(source="Src")._value.get() == 0
+
+    def test_transport_failure_status_is_zero(self, metrics):
+        metrics.record_source_failure("Src", error_type="fetch",
+                                      exc=Exception("boom"), duration=0.5)
+        assert metrics.source_http_status.labels(source="Src")._value.get() == 0
+
+
+# ===========================================================================
+# 16. Zero-feed guardrail + FAIL_ON_DEAD_FEED (v3.9)
+# ===========================================================================
+
+
+class TestZeroFeedGuardrail:
+    def _disable_all_feeds(self, monkeypatch):
+        for source in bi.BLOCKLIST_SOURCES:
+            if source.enabled_key:
+                monkeypatch.setenv(source.enabled_key.upper(), "false")
+
+    def test_zero_enabled_feeds_refused(self, clean_env, monkeypatch, logger):
+        self._disable_all_feeds(monkeypatch)
+        monkeypatch.setenv("DRY_RUN", "true")
+        cfg = Config.from_env()
+        stats = bi.run_import(cfg, logger)
+        assert stats.fatal_no_feeds is True
+        assert stats.sources_ok == 0
+
+    def test_zero_enabled_feeds_exit_nonzero(self, clean_env, monkeypatch, logger):
+        self._disable_all_feeds(monkeypatch)
+        monkeypatch.setenv("DRY_RUN", "true")
+        cfg = Config.from_env()
+        assert bi._run_once(cfg, logger) == 1
+
+    def test_custom_blocklists_still_count_as_feeds(self, clean_env, monkeypatch, logger):
+        self._disable_all_feeds(monkeypatch)
+        monkeypatch.setenv("DRY_RUN", "true")
+        monkeypatch.setenv("CUSTOM_BLOCKLISTS", "http://example.com/list.txt")
+        cfg = Config.from_env()
+        with patch("blocklist_import.fetch_blocklist") as mock_fetch:
+            mock_fetch.return_value = ([], [], FetchResult(source=BlocklistSource(name="custom"),
+                                                           success=True))
+            stats = bi.run_import(cfg, logger)
+        assert stats.fatal_no_feeds is False
+
+
+class TestFailOnDeadFeed:
+    def test_exit_nonzero_when_feed_failed(self, monkeypatch, logger):
+        cfg = Config(fail_on_dead_feed=True)
+        stats = ImportStats()
+        stats.sources_ok = 2
+        stats.sources_failed = 1
+        stats.imported_ok = 10
+        monkeypatch.setattr(bi, "run_import", lambda c, l: stats)
+        assert bi._run_once(cfg, logger) == 1
+
+    def test_exit_zero_when_flag_off(self, monkeypatch, logger):
+        cfg = Config(fail_on_dead_feed=False)
+        stats = ImportStats()
+        stats.sources_ok = 2
+        stats.sources_failed = 1
+        stats.imported_ok = 10
+        monkeypatch.setattr(bi, "run_import", lambda c, l: stats)
+        assert bi._run_once(cfg, logger) == 0
+
+    def test_exit_zero_when_no_failures(self, monkeypatch, logger):
+        cfg = Config(fail_on_dead_feed=True)
+        stats = ImportStats()
+        stats.sources_ok = 3
+        stats.sources_failed = 0
+        stats.imported_ok = 10
+        monkeypatch.setattr(bi, "run_import", lambda c, l: stats)
+        assert bi._run_once(cfg, logger) == 0
+
+
+# ===========================================================================
+# 17. Per-feed license metadata (v3.9)
+# ===========================================================================
+
+
+class TestLicenseMetadata:
+    def test_every_source_declares_license_fields(self):
+        for source in bi.BLOCKLIST_SOURCES:
+            assert isinstance(source.license, str) and source.license and source.license != "unknown"
+            assert source.attribution_required in (True, False, None)
+            assert source.commercial_ok in (True, False, None)
+
+    def test_spamhaus_drop_commercial_ok_with_attribution(self):
+        spamhaus = next(s for s in bi.BLOCKLIST_SOURCES if s.name == "Spamhaus DROP")
+        # Spamhaus DROP is free for any use (including commercial) with credit;
+        # the non-commercial limits apply to Spamhaus DNSBLs, not DROP.
+        assert spamhaus.commercial_ok is True
+        assert spamhaus.attribution_required is True
+
+    def test_restricted_feeds_flagged_not_commercial_ok(self):
+        by_name = {}
+        for s in bi.BLOCKLIST_SOURCES:
+            by_name.setdefault(s.name, s)
+        # feeds with explicit commercial restrictions must not read as OK
+        assert by_name["Binary Defense"].commercial_ok is False
+        assert by_name["URLhaus"].commercial_ok is False
+        assert by_name["DShield"].commercial_ok is False
+
+    def test_list_sources_shows_license_and_presets(self, clean_env, caplog):
+        log = logging.getLogger("blocklist-import")
+        with caplog.at_level(logging.INFO, logger="blocklist-import"):
+            bi.list_blocklist_sources(log)
+        assert "commercial_ok" in caplog.text
+        assert "attribution_required" in caplog.text
+        assert "Spamhaus DROP terms" in caplog.text
+        assert "presets: embedded" in caplog.text
