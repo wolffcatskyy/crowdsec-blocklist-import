@@ -685,7 +685,7 @@ MIT License -- See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-**Maintained by** [wolffcatskyy](https://github.com/wolffcatskyy). Developed with assistance from Claude AI.
+**Maintained by** [wolffcatskyy](https://github.com/wolffcatskyy).
 
 **Special Thanks:**
 - [CrowdSec](https://www.crowdsec.net/) for the threat detection platform
