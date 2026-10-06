@@ -278,14 +278,6 @@ python blocklist_import.py
 
 ## Submitting Pull Requests
 
-### AI Disclosure
-
-**Always disclose if AI assisted you.** Include this in your PR:
-
-```
-🤖 *This PR was assisted by Claude AI.*
-```
-
 ### Branch Naming
 
 - `fix/` — bug fixes (`fix/prometheus-label-overflow`)
@@ -332,10 +324,6 @@ Why was this change needed? Link to issue if applicable (Closes #123)
 - [ ] `.env.example` updated if adding new config options
 - [ ] README updated if adding new features
 
-## AI Assistance
-- **Tool:** Claude / Cursor / etc. (if used)
-- **Disclosure:** 🤖 *This PR was assisted by Claude AI.*
-```
 
 ### Review Process
 
