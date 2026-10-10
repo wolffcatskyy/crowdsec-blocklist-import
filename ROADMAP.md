@@ -109,6 +109,7 @@ These items are under consideration but not yet scheduled:
 - Shodan honeypot data
 - GreyNoise RIOT dataset
 - Project Honeypot
+- Avastel proxy bot IP list (issue #114): research suitability and provenance, including a possible opt-in preset; not a default.
 
 ### Multi-Instance Coordination
 - Distributed locking to prevent duplicate imports
