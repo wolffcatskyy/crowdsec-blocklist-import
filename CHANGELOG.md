@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ---
 ## [Unreleased]
 
+---
+## [3.9.0] — 2026-10-13
+
 ### Added
 
 - Report-only Autopilot planning primitives with explicit unknown telemetry and deterministic capacity estimates. No collector, CLI, automatic feed changes, or enforcement workflow is connected yet.
@@ -15,6 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **`--list-sources --format md`** — Print the source list as a Markdown table with a live feed count, so documentation can be regenerated instead of drifting.
 - **Live LAPI CI test** - New `live-lapi` job runs the importer against a real CrowdSec container in CI: it asserts structured scenarios round-trip byte-for-byte, that an IP listed by two feeds carries the higher confidence, that `CONSOLIDATE_ALERTS=true` stays per-feed, and that the LAPI has no online API credentials or console enrollment, so imported alerts cannot leak upstream as community signals.
 - **Structured scenario names with feed + confidence** - `SCENARIO_FORMAT=structured` writes `external/blocklist-import/<feed-slug>/c<0-100>` (e.g. `external/blocklist-import/spamhaus-drop/c95`) so downstream tools can rank imported IPs by feed quality. The crowdsec-unifi-bouncer sidecar uses it to drop low-confidence imports first when device capacity runs out. Per-feed defaults are built in; override with `FEED_CONFIDENCE="slug=NN,..."`, change the prefix with `SCENARIO_PREFIX`. Legacy `external/blocklist (Feed Name)` stays the default, so existing filters and dashboards are untouched. See [docs/scenario-format.md](docs/scenario-format.md).
+
+- **Feed presets (`PRESET=`)** — `embedded` (Spamhaus DROP, abuse.ch Feodo + URLhaus, Emerging Threats, IPsum; stays around ~20K IPs, safe for UDM/UDR-class devices), `server` (the legacy set minus Firehol level3, VXVault, Tor, and dead feeds), and `max` (everything; the pre-v3.9 behavior). Presets set the default for every `ENABLE_*` switch; explicit values always win. `PRESET=embedded` also caps decisions at 15,000 (`MAX_DECISIONS`) unless you set your own value. Addresses #21, #26, #38, #98.
+- **Defaults-flip deprecation warning** — runs with neither `PRESET` nor `BLOCKLISTS_OPT_IN` set log a loud warning on every run and include it in webhook notifications. v4.0.0 will switch the no-config fallback to `PRESET=server`.
+- **Zero-feed guardrail** — a run with zero enabled feeds now exits non-zero with a clear message instead of silently importing nothing.
+- **Feed health metrics** — new per-source Prometheus gauges: `blocklist_import_source_last_success_timestamp`, `blocklist_import_source_entries`, `blocklist_import_source_unique_contribution`, and `blocklist_import_source_http_status`.
+- **`FAIL_ON_DEAD_FEED`** — set to `true` to exit non-zero when any enabled feed fails to fetch.
+- **Per-feed license metadata** — `--list-sources` now reports each feed's license plus `attribution_required` and `commercial_ok` flags (checked against provider terms) so MSP and business users can filter feeds before enabling them.
 
 ### Fixed
 
@@ -34,22 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **`STATE.md`** — Stale generated repository-state report (dated 2026-02-22, claimed v3.4.0 and 36 feeds) that contradicted current docs.
 - **Monty Security C2 feed** — Removed from the registry, setup wizard, and docs; upstream deleted `data/all.txt` and no replacement URL is confirmed (#80). Configurations that still set `ENABLE_MONTY_SECURITY_C2` now log an error naming the feed as removed. The true feed count is 31; README, `pyproject.toml`, and CONTRIBUTING updated to match `--list-sources`.
 
----
-## [3.9.0] — Prepared, not yet released
-
-### Added
-
-- **Feed presets (`PRESET=`)** — `embedded` (Spamhaus DROP, abuse.ch Feodo + URLhaus, Emerging Threats, IPsum; stays around ~20K IPs, safe for UDM/UDR-class devices), `server` (the legacy set minus Firehol level3, VXVault, Tor, and dead feeds), and `max` (everything; the pre-v3.9 behavior). Presets set the default for every `ENABLE_*` switch; explicit values always win. `PRESET=embedded` also caps decisions at 15,000 (`MAX_DECISIONS`) unless you set your own value. Addresses #21, #26, #38, #98.
-- **Defaults-flip deprecation warning** — runs with neither `PRESET` nor `BLOCKLISTS_OPT_IN` set log a loud warning on every run and include it in webhook notifications. v4.0.0 will switch the no-config fallback to `PRESET=server`.
-- **Zero-feed guardrail** — a run with zero enabled feeds now exits non-zero with a clear message instead of silently importing nothing.
-- **Feed health metrics** — new per-source Prometheus gauges: `blocklist_import_source_last_success_timestamp`, `blocklist_import_source_entries`, `blocklist_import_source_unique_contribution`, and `blocklist_import_source_http_status`.
-- **`FAIL_ON_DEAD_FEED`** — set to `true` to exit non-zero when any enabled feed fails to fetch.
-- **Per-feed license metadata** — `--list-sources` now reports each feed's license plus `attribution_required` and `commercial_ok` flags (checked against provider terms) so MSP and business users can filter feeds before enabling them.
-
 ### Notes
 
 - **No default behavior changes in this release.** With no configuration, all feeds stay enabled exactly as before; the behavior change lands in v4.0.0. Set `PRESET=max` now to keep it, or `PRESET=server` / `PRESET=embedded` to move early.
-
 
 ---
 ## [3.8.0] — 2026-09-22
