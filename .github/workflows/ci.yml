@@ -29,7 +29,7 @@ jobs:
 
       - name: Run pytest
         run: |
-          python -m pytest test_blocklist_import.py test_feed_health_coverage.py test_autopilot_report.py test_release_metadata.py -v
+          python -m pytest test_blocklist_import.py test_feed_health_coverage.py test_autopilot_report.py test_autopilot_metrics.py test_release_metadata.py -v
 
       - name: Check Python syntax
         run: |
