@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Added
 
+- Report-only Autopilot planning primitives with explicit unknown telemetry and deterministic capacity estimates. No collector, CLI, automatic feed changes, or enforcement workflow is connected yet.
+
 - **Data-Shield IPv4 feed (opt-in)** - New source: duggytuxy's Data-Shield IPv4 Blocklist Community list (~96K curated malicious IPv4 entries, GPL-3.0), promised in discussion #76. It is an explicit opt-in feed: `ENABLE_DATA_SHIELD` stays off under every preset (including `max`), `BLOCKLISTS_OPT_IN` mode, and the legacy all-on default - only `ENABLE_DATA_SHIELD=true` enables it. Distinct from the SANS ISC DShield feeds despite the similar name. Default confidence 65; override with `FEED_CONFIDENCE="data-shield-ipv4=NN"`.
 - **`--list-sources --format md`** — Print the source list as a Markdown table with a live feed count, so documentation can be regenerated instead of drifting.
 - **Live LAPI CI test** - New `live-lapi` job runs the importer against a real CrowdSec container in CI: it asserts structured scenarios round-trip byte-for-byte, that an IP listed by two feeds carries the higher confidence, that `CONSOLIDATE_ALERTS=true` stays per-feed, and that the LAPI has no online API credentials or console enrollment, so imported alerts cannot leak upstream as community signals.
@@ -33,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **Monty Security C2 feed** — Removed from the registry, setup wizard, and docs; upstream deleted `data/all.txt` and no replacement URL is confirmed (#80). Configurations that still set `ENABLE_MONTY_SECURITY_C2` now log an error naming the feed as removed. The true feed count is 31; README, `pyproject.toml`, and CONTRIBUTING updated to match `--list-sources`.
 
 ---
-## [3.9.0] — 2026-09-24
+## [3.9.0] — Prepared, not yet released
 
 ### Added
 
@@ -85,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 - **Monty Security C2 Source** — Disable by default; upstream removed `data/all.txt` file. Users can re-enable via `ENABLE_MONTY_SECURITY_C2=true` if alternative URL is confirmed.
 - **NO_METRICS Environment Variable** — Add support for `NO_METRICS=true` as an alias for disabling metrics, in addition to existing `METRICS_ENABLED=false`.
 
-## [Unreleased]
+## Earlier changes awaiting release reconciliation
 
 ### Added
 
