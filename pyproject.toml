@@ -52,7 +52,7 @@ Issues = "https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues"
 crowdsec-blocklist-import = "blocklist_import:main"
 
 [tool.setuptools]
-py-modules = ["blocklist_import", "autopilot_report"]
+py-modules = ["blocklist_import", "autopilot_report", "autopilot_metrics"]
 
 [tool.setuptools.dynamic]
 # Single source of truth: the release workflows already require the tag to
