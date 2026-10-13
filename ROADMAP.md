@@ -8,6 +8,15 @@ _Refreshed September 23, 2026. Plans, not promises: priorities can shift with us
 
 ---
 
+## Autopilot (proposed)
+
+A report-only feed-management assistant, developed in phases. The first phase recommends and previews; it does not change feed settings, delete decisions, or alter enforcement. Scope is tracked in [issue #116](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/116).
+
+1. Establish a validated per-feed hit-telemetry source and collect hit rates with coverage and freshness.
+2. Recommend review of feeds with zero observed hits over a complete configurable window and identify potentially noisy feeds using explicit criteria. Missing or partial telemetry is unknown, not zero; recommendations never disable feeds.
+3. Preview the impact and pack selected feeds against a configured UniFi IP-group limit, showing proposed inclusions/exclusions, projected counts, evidence and unknowns.
+4. Any apply mode requires a separate design and review. No automatic action is in scope for Phase 1.
+
 ## Earlier roadmap notes
 
 This document outlines the planned features and improvements for `crowdsec-blocklist-import`. We welcome community contributions to any of these items.
