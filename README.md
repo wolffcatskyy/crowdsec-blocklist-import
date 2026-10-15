@@ -195,7 +195,7 @@ CROWDSEC_MACHINE_PASSWORD=your_password
 DECISION_DURATION=24h
 ```
 
-All credential variables support Docker Secrets via `_FILE` suffix (e.g., `CROWDSEC_LAPI_KEY_FILE=/run/secrets/lapi_key`).
+Credential file variants are listed in [Docker Secrets](#docker-secrets) below.
 
 ### LAPI HTTPS and Client Certificate Settings
 
@@ -300,13 +300,13 @@ Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier
 
 When neither `PRESET` nor `BLOCKLISTS_OPT_IN` is set, the legacy all-on default still applies, but every run logs a loud deprecation warning (and includes it in webhook notifications) ahead of the v4.0.0 flip. A run that ends up with zero enabled feeds exits non-zero instead of silently importing nothing.
 
-Set `FAIL_ON_DEAD_FEED=true` to exit non-zero when any enabled feed fails to fetch.
+In single-run mode (`INTERVAL=0`), set `FAIL_ON_DEAD_FEED=true` to exit non-zero when any enabled feed fails to fetch. This reports a failed run; it does not roll back decisions imported from other feeds. Have cron, systemd, or CI check the exit status and send an alert. The built-in `INTERVAL` scheduler keeps running after feed failures, so monitor logs or per-feed metrics rather than waiting for the process to exit.
 
 Run `--list-sources` to see every feed with its preset membership and license metadata (`license`, `attribution_required`, `commercial_ok`).
 
 ### Selective Blocklists
 
-All blocklists are enabled by default. Disable feeds you don't need:
+Without a preset or opt-in setting, the legacy feed defaults apply. A preset takes precedence over `BLOCKLISTS_OPT_IN`; setting both does **not** turn a preset into an explicit-only feed list. For explicit-only selection, leave `PRESET` unset and enable the feeds you need:
 
 ```bash
 # Optional safe posture: disable every feed unless explicitly enabled below
@@ -341,6 +341,16 @@ ALLOWLIST="1.2.3.4,5.6.7.8,192.168.0.0/16,10.0.0.0/8"
 # Auto-fetch GitHub IP ranges (git, web, api, hooks, actions)
 ALLOWLIST_GITHUB=true
 ```
+
+### Gateway and firewall bouncer safety
+
+On a gateway, a firewall bouncer configured to filter forwarded traffic can also block outbound connections from LAN hosts or containers. The affected traffic depends on the bouncer's rules and chain configuration; not every nftables deployment filters the forward chain. See the [firewall bouncer configuration](https://docs.crowdsec.net/u/bouncers/firewall/) for managed and set-only modes. [Issue #38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38) reports a local Gitea instance losing access to GitHub after GitHub IPs were imported as bans.
+
+Review feed selection and required service destinations before enabling broad feeds. `ALLOWLIST_GITHUB=true` excludes GitHub ranges from this importer's candidates; use `ALLOWLIST` for other required IPs or CIDRs. These settings do not remove bans already present in LAPI or override bans from other sources. If access is already blocked, inspect the existing decisions and bouncer rules before removing only the affected bans.
+
+For UDM/UDR-class devices, select `PRESET=embedded` and check the effective decision cap. The supplied `docker-compose.yml` explicitly defaults `MAX_DECISIONS` to 40000, which overrides the embedded preset's 15000 default. Set `MAX_DECISIONS=15000` (or a device-tested lower limit) explicitly when using that Compose file on constrained hardware.
+
+For v4.0 readiness, choose `PRESET=server`, `max`, or `embedded` explicitly for preset-based deployments. Keep `PRESET` unset for explicit-only `BLOCKLISTS_OPT_IN=true` deployments. Review existing `ENABLE_*` overrides: they still win over preset defaults. Do not add an HTTPS CA path to an HTTP URL; the [TLS settings](#lapi-https-and-client-certificate-settings) above apply to HTTPS connections.
 
 ---
 
@@ -476,7 +486,15 @@ Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier
 
 ### Docker Secrets
 
-All credential variables support the `_FILE` suffix for Docker Secrets:
+The following credential variables support file-backed injection. Use mounted secret files rather than inline production credentials, and provide either the value or its file variant:
+
+| Credential variable | File-backed variant | Purpose |
+|---------------------|---------------------|---------|
+| `CROWDSEC_LAPI_KEY` | `CROWDSEC_LAPI_KEY_FILE` | Bouncer API key for reading existing decisions |
+| `CROWDSEC_MACHINE_PASSWORD` | `CROWDSEC_MACHINE_PASSWORD_FILE` | Machine password for watcher login and writing decisions |
+| `ABUSEIPDB_API_KEY` | `ABUSEIPDB_API_KEY_FILE` | Optional AbuseIPDB API key |
+
+The file must exist and be readable inside the container. Docker Compose secrets, Swarm secrets, or Kubernetes Secret volume mounts can supply these paths; the importer reads the files, not the orchestration service. Protect the source files on the host as well.
 
 ```yaml
 services:
