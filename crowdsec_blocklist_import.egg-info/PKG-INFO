@@ -1,0 +1,787 @@
+Metadata-Version: 2.4
+Name: crowdsec-blocklist-import
+Version: 3.9.0
+Summary: Memory-efficient importer for public threat feeds into CrowdSec via LAPI
+Author: wolffcatskyy
+License: MIT
+Project-URL: Homepage, https://github.com/wolffcatskyy/crowdsec-blocklist-import
+Project-URL: Repository, https://github.com/wolffcatskyy/crowdsec-blocklist-import
+Project-URL: Changelog, https://github.com/wolffcatskyy/crowdsec-blocklist-import/blob/main/CHANGELOG.md
+Project-URL: Issues, https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues
+Keywords: crowdsec,blocklist,threat-intelligence,firewall,security
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Intended Audience :: System Administrators
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Security
+Classifier: Topic :: System :: Networking :: Firewalls
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests<3.0.0,>=2.28.0
+Requires-Dist: python-dotenv<2.0.0,>=1.0.0
+Provides-Extra: metrics
+Requires-Dist: prometheus-client<1.0.0,>=0.17.0; extra == "metrics"
+Provides-Extra: all
+Requires-Dist: crowdsec-blocklist-import[metrics]; extra == "all"
+Dynamic: license-file
+
+# crowdsec-blocklist-import
+
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
+
+**Import 32 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
+
+> [!WARNING]
+> **Defaults are changing in v4.0.0.** Today, with no configuration, every feed is enabled. v4.0.0 will switch the no-config fallback to `PRESET=server` (a conservative, high-confidence set). Set `PRESET=max` to keep the current behavior, or `PRESET=embedded` for UDM/UDR-class devices. v3.9 adds `PRESET=`, per-feed health metrics, `FAIL_ON_DEAD_FEED`, and per-feed license metadata in `--list-sources` - see the [changelog](CHANGELOG.md).
+
+[![GitHub Stars](https://img.shields.io/github/stars/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/wolffcatskyy/crowdsec-blocklist-import/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/wolffcatskyy/crowdsec-blocklist-import?style=flat-square&label=release)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![GHCR](https://img.shields.io/badge/GHCR-container-blue?style=flat-square&logo=github)](https://github.com/wolffcatskyy/crowdsec-blocklist-import/pkgs/container/crowdsec-blocklist-import)
+[![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
+
+```
+  Threat Feeds (32)           crowdsec-blocklist-import           CrowdSec LAPI
+ ┌──────────────────┐        ┌────────────────────────┐        ┌──────────────┐
+ │ IPsum            │───────>│  Fetch & Normalize     │        │              │
+ │ Spamhaus DROP    │───────>│  Deduplicate vs LAPI   │───────>│  Decisions   │──> Bouncers
+ │ Firehol L1/L2/L3 │───────>│  Batch Import          │        │  Database    │    (fw, CDN,
+ │ Abuse.ch Feodo   │───────>│  Allowlist Filtering   │        │              │     nginx...)
+ │ 27 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
+ └──────────────────┘        └────────────────────────┘
+```
+
+---
+
+**Table of Contents:**
+[Why This Tool](#why-ip-freshness-matters) | [Features](#core-features) | [Quickstart](#quickstart) | [Installation](#installation) | [Configuration](#configuration) | [Blocklists](#supported-blocklists) | [CLI Usage](#cli-usage) | [Advanced Usage](#advanced-usage) | [Monitoring](#monitoring) | [Troubleshooting](#troubleshooting) | [Contributing](#contributing)
+
+---
+
+## Why IP Freshness Matters
+
+Most blocklist tools suffer from a critical flaw: **staleness**. They fetch blocklists on a schedule, cache them, and enforce stale entries for days or weeks. By then, threat actors have rotated to new infrastructure, but your firewall still blocks addresses that were compromised weeks ago.
+
+**crowdsec-blocklist-import solves this:**
+
+- **Fresh IPs propagate instantly** -- New threats from 32 feeds hit your network within minutes, not days
+- **Expired threats are removed immediately** -- Recovered IPs are automatically delisted, not held for weeks
+- **No cron delays** -- Run hourly or on-demand via built-in scheduler
+- **No stale drift** -- Every sync is a complete refresh; no orphaned entries linger
+
+This is the difference between reactive security (waiting for alerts) and **active threat intelligence** (staying ahead of attackers).
+
+---
+
+## Core Features
+
+- **Deduplication Engine** -- Detects IPs already in CrowdSec, eliminating redundant processing and API calls
+- **Normalization Layer** -- Strips comments, validates CIDR blocks, removes duplicates, enforces consistent formatting across all feeds
+- **Real-Time Sync** -- No caching, no delays. Every import is a complete refresh with live threat data
+- **32 Threat Feeds** -- IPsum, Spamhaus, Blocklist.de, Firehol, Abuse.ch, Emerging Threats, Binary Defense, DShield, AbuseIPDB, StopForumSpam, Tor nodes, scanner IPs, and more
+- **Per-Feed Control** -- Enable or disable individual blocklists via environment variables
+- **Allowlist Support** -- Three-tier system: static IP lists, CIDR ranges, and provider-specific exceptions (GitHub IPs)
+- **Built-in Scheduler** -- Long-lived daemon mode with `INTERVAL=3600`. Graceful SIGTERM/SIGINT shutdown
+- **Webhook Notifications** -- Push import results to Discord, Slack, or any generic webhook endpoint
+- **AbuseIPDB Integration** -- Public mirror (no key needed) plus optional direct API for higher rate limits and fresher data
+- **Prometheus Metrics** -- Push to Pushgateway for monitoring imports, deduplication rates, and feed health
+- **Grafana Dashboard** -- Pre-built [dashboard](grafana-dashboard.json) for visualizing import metrics
+- **Docker Secrets** -- All credential variables support `_FILE` suffix for mounted secret files
+- **Consolidated Alerts** -- Optionally batch all IPs into a single alert per run to save CrowdSec alert quota
+- **Machine Status** -- Sends LAPI heartbeat and OS metadata so `cscli machines list` shows recent activity
+
+---
+
+## Quickstart
+
+### 1. Prerequisites
+
+You need CrowdSec running with LAPI credentials:
+
+```bash
+# Create machine credentials (for writing decisions)
+cscli machines add blocklist-import --password 'SecurePassword123'
+
+# Create bouncer key (for reading existing decisions)
+cscli bouncers add blocklist-import -o raw
+# Save the output -- you'll need it below
+```
+
+### 2. Docker Compose (Recommended)
+
+```yaml
+services:
+  blocklist-import:
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+    restart: unless-stopped
+    networks:
+      - crowdsec
+    environment:
+      - CROWDSEC_LAPI_URL=http://crowdsec:8080
+      - CROWDSEC_LAPI_KEY=YOUR_BOUNCER_KEY
+      - CROWDSEC_MACHINE_ID=blocklist-import
+      - CROWDSEC_MACHINE_PASSWORD=SecurePassword123
+      - DECISION_DURATION=24h
+      - INTERVAL=3600           # Run every hour (built-in scheduler)
+      - CROWDSEC_HEARTBEAT_INTERVAL=60
+      - LOG_LEVEL=INFO
+
+networks:
+  crowdsec:
+    external: true
+```
+
+```bash
+docker compose up -d
+```
+
+With `INTERVAL=3600`, the container runs as a long-lived daemon and repeats every hour. No cron or systemd timer needed. Set `INTERVAL=0` (default) for a single run.
+
+### 3. One-Shot Mode (Cron/Timer)
+
+If you prefer external scheduling, omit `INTERVAL` and use `restart: "no"`:
+
+```bash
+# Daily at 4am
+0 4 * * * docker compose -f /path/to/compose.yml up --abort-on-container-exit
+```
+
+---
+
+## Installation
+
+### Docker (Recommended)
+
+```bash
+docker run --rm --network crowdsec \
+  -e CROWDSEC_LAPI_URL=http://crowdsec:8080 \
+  -e CROWDSEC_LAPI_KEY=YOUR_KEY \
+  -e CROWDSEC_MACHINE_ID=blocklist-import \
+  -e CROWDSEC_MACHINE_PASSWORD=YourPassword \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+```
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap wolffcatskyy/crowdsec
+brew install crowdsec-blocklist-import
+```
+
+### pip (Python 3.9+)
+
+```bash
+pip install git+https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+
+cp .env.example .env
+# Edit .env with your credentials
+
+crowdsec-blocklist-import
+```
+
+### From Source
+
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+cd crowdsec-blocklist-import
+
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your credentials
+
+python blocklist_import.py
+```
+
+### Build Docker Image Locally
+
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-blocklist-import.git
+cd crowdsec-blocklist-import
+docker build -t crowdsec-blocklist-import .
+docker run --rm --network crowdsec -e ... crowdsec-blocklist-import
+```
+
+For detailed configuration options, see [Configuration Reference](docs/config-reference.md).
+
+---
+
+## Configuration
+
+### Minimal Setup
+
+Edit `.env` with your CrowdSec credentials:
+
+```bash
+CROWDSEC_LAPI_URL=http://crowdsec:8080
+CROWDSEC_LAPI_KEY=your_bouncer_key
+CROWDSEC_MACHINE_ID=blocklist-import
+CROWDSEC_MACHINE_PASSWORD=your_password
+DECISION_DURATION=24h
+```
+
+Credential file variants are listed in [Docker Secrets](#docker-secrets) below.
+
+### LAPI HTTPS and Client Certificate Settings
+
+This importer is a client of CrowdSec LAPI. It has three independent TLS/auth settings:
+
+- `CROWDSEC_LAPI_CA_CERT_PATH` verifies the HTTPS certificate served by LAPI. Use it when connecting to `https://...` and the LAPI server certificate is not trusted by the container's default CA store. This does not authenticate the importer to LAPI.
+- `CROWDSEC_LAPI_AGENT_CERT_PATH` and `CROWDSEC_LAPI_AGENT_KEY_PATH` present an agent client certificate to LAPI. CrowdSec uses this for watcher login/JWT auth, which is needed for writing alerts and decisions.
+- `CROWDSEC_LAPI_BOUNCER_CERT_PATH` and `CROWDSEC_LAPI_BOUNCER_KEY_PATH` present a bouncer client certificate to LAPI. CrowdSec uses this for bouncer auth, which is needed for reading existing decisions from `/v1/decisions`.
+
+Agent and bouncer certificate pairs are optional, but each pair must be complete if used.
+
+For normal HTTPS plus machine credentials/API key:
+
+```bash
+CROWDSEC_LAPI_URL=https://crowdsec:8080
+CROWDSEC_LAPI_CA_CERT_PATH=/certs/crowdsec_lapi.pem
+CROWDSEC_LAPI_KEY=your_bouncer_key
+CROWDSEC_MACHINE_ID=blocklist-import
+CROWDSEC_MACHINE_PASSWORD=your_password
+```
+
+For LAPI client certificate authentication:
+
+```bash
+CROWDSEC_LAPI_URL=https://crowdsec:8080
+CROWDSEC_LAPI_AGENT_CERT_PATH=/certs/blocklist-import-agent.pem
+CROWDSEC_LAPI_AGENT_KEY_PATH=/certs/blocklist-import-agent-key.pem
+CROWDSEC_LAPI_BOUNCER_CERT_PATH=/certs/blocklist-import-bouncer.pem
+CROWDSEC_LAPI_BOUNCER_KEY_PATH=/certs/blocklist-import-bouncer-key.pem
+# Optional and unrelated to the client cert/key:
+CROWDSEC_LAPI_CA_CERT_PATH=/certs/crowdsec_lapi.pem
+```
+
+When `CROWDSEC_LAPI_BOUNCER_CERT_PATH` and `CROWDSEC_LAPI_BOUNCER_KEY_PATH` are set, the importer presents that bouncer certificate for decision reads and does not send the `X-Api-Key` header on those requests. Existing API key and machine JWT authentication continue to work when client certificate/key pairs are not configured.
+
+CrowdSec has two different CA settings that are easy to mix up:
+
+- `CROWDSEC_LAPI_CA_CERT_PATH` is client-side. It tells this importer which CA to trust for the LAPI HTTPS server certificate.
+- `api.server.tls.ca_cert_path` is server-side in CrowdSec. It tells LAPI which CA signed client certificates, so LAPI can verify the agent and bouncer client certificates.
+
+A CrowdSec config with only `cert_file` and `key_file` enables HTTPS for LAPI. It does not require, or enable, client certificate authentication by itself. To use client certificates as authentication, LAPI also needs a client-cert CA and allowed OU, for example:
+
+```yaml
+api:
+  server:
+    tls:
+      cert_file: /usr/local/etc/crowdsec/ssl/crowdsec_lapi.pem
+      key_file: /usr/local/etc/crowdsec/ssl/crowdsec_lapi_key.pem
+      ca_cert_path: /usr/local/etc/crowdsec/ssl/client_ca.pem
+      agents_allowed_ou:
+        - agent-ou
+      bouncers_allowed_ou:
+        - bouncer-ou
+```
+
+### Common Settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DECISION_DURATION` | `24h` | How long imported decisions last |
+| `BATCH_SIZE` | `1000` | IPs per batch (memory vs. speed tradeoff) |
+| `DECISION_TYPE` | `ban` | Type of decision (`ban`, `captcha`, `throttle`) |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `DRY_RUN` | `false` | Preview without importing |
+| `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = single run) |
+| `CROWDSEC_HEARTBEAT_INTERVAL` | `60` | Machine heartbeat interval in seconds (0 = disabled) |
+| `CONSOLIDATE_ALERTS` | `false` | Batch IPs into fewer alerts per run (saves alert quota). With `SCENARIO_FORMAT=structured`, one alert per feed so per-feed confidence is kept |
+
+### Notification Settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `WEBHOOK_URL` | *(none)* | Webhook URL for import notifications |
+| `WEBHOOK_TYPE` | `generic` | Webhook format: `generic`, `discord`, `slack` |
+
+### AbuseIPDB
+
+`ENABLE_ABUSE_IPDB=true` fetches the **public mirror** maintained by [@borestad](https://github.com/borestad/blocklist-abuseipdb) — no API key required.
+
+For higher rate limits and fresher data, you can optionally configure a **direct API key**:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ABUSEIPDB_API_KEY` | *(none)* | Optional: direct API key for higher rate limits |
+| `ABUSEIPDB_API_KEY_FILE` | *(none)* | Optional: API key file path (Docker Secrets) |
+| `ABUSEIPDB_MIN_CONFIDENCE` | `90` | Minimum confidence score (1-100) |
+| `ABUSEIPDB_LIMIT` | `10000` | Max IPs to fetch per direct API query |
+
+Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
+
+### Feed Presets
+
+`PRESET` picks a ready-made feed set: it sets the default for every `ENABLE_*` switch, and explicit `ENABLE_*` values always win.
+
+| Preset | Feeds | Use case |
+|--------|-------|----------|
+| `embedded` | Spamhaus DROP, abuse.ch (Feodo + URLhaus), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs and caps decisions at 15,000 by default (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
+| `server` | Everything except Firehol level3, VXVault, Tor, and dead feeds | Servers and VPSes; drops the feeds with false-positive history ([#26](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/26), [#38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38)) |
+| `max` | Everything (the pre-v3.9 behavior) | Maximum coverage |
+
+`PRESET=embedded` also sets `MAX_DECISIONS=15000` unless you set your own value (`MAX_DECISIONS=0` keeps it unlimited). Other presets leave `MAX_DECISIONS` unlimited.
+
+When neither `PRESET` nor `BLOCKLISTS_OPT_IN` is set, the legacy all-on default still applies, but every run logs a loud deprecation warning (and includes it in webhook notifications) ahead of the v4.0.0 flip. A run that ends up with zero enabled feeds exits non-zero instead of silently importing nothing.
+
+In single-run mode (`INTERVAL=0`), set `FAIL_ON_DEAD_FEED=true` to exit non-zero when any enabled feed fails to fetch. This reports a failed run; it does not roll back decisions imported from other feeds. Have cron, systemd, or CI check the exit status and send an alert. The built-in `INTERVAL` scheduler keeps running after feed failures, so monitor logs or per-feed metrics rather than waiting for the process to exit.
+
+Run `--list-sources` to see every feed with its preset membership and license metadata (`license`, `attribution_required`, `commercial_ok`).
+
+### Selective Blocklists
+
+Without a preset or opt-in setting, the legacy feed defaults apply. A preset takes precedence over `BLOCKLISTS_OPT_IN`; setting both does **not** turn a preset into an explicit-only feed list. For explicit-only selection, leave `PRESET` unset and enable the feeds you need:
+
+```bash
+# Optional safe posture: disable every feed unless explicitly enabled below
+BLOCKLISTS_OPT_IN=true
+ENABLE_IPSUM=true           # Aggregated threats (review before enabling)
+ENABLE_SPAMHAUS=true        # Spamhaus DROP
+ENABLE_TOR=false            # Tor exit nodes (may cause false positives)
+ENABLE_SCANNERS=false       # Shodan/Censys scanners
+```
+
+See [Configuration Reference](docs/config-reference.md) for the full list of `ENABLE_*` variables.
+
+### Custom Blocklists
+
+Import any additional IP list via URL — e.g. cloud provider ranges, vendor-specific blocklists, or community feeds:
+
+```bash
+# Comma-separated list of URLs; each is fetched and imported like a built-in source
+CUSTOM_BLOCKLISTS="https://example.com/alibaba.txt,https://example.com/facebook.txt"
+```
+
+Each URL is added as its own source (`custom_blocklist_0`, `custom_blocklist_1`, ...) and goes through the same dedup, allowlist, and MAX_DECISIONS logic as the built-in feeds.
+
+### Allowlists
+
+Protect trusted IPs from being blocked:
+
+```bash
+# Comma-separated IPs and/or CIDR ranges
+ALLOWLIST="1.2.3.4,5.6.7.8,192.168.0.0/16,10.0.0.0/8"
+
+# Auto-fetch GitHub IP ranges (git, web, api, hooks, actions)
+ALLOWLIST_GITHUB=true
+```
+
+### Gateway and firewall bouncer safety
+
+On a gateway, a firewall bouncer configured to filter forwarded traffic can also block outbound connections from LAN hosts or containers. The affected traffic depends on the bouncer's rules and chain configuration; not every nftables deployment filters the forward chain. See the [firewall bouncer configuration](https://docs.crowdsec.net/u/bouncers/firewall/) for managed and set-only modes. [Issue #38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38) reports a local Gitea instance losing access to GitHub after GitHub IPs were imported as bans.
+
+Review feed selection and required service destinations before enabling broad feeds. `ALLOWLIST_GITHUB=true` excludes GitHub ranges from this importer's candidates; use `ALLOWLIST` for other required IPs or CIDRs. These settings do not remove bans already present in LAPI or override bans from other sources. If access is already blocked, inspect the existing decisions and bouncer rules before removing only the affected bans.
+
+For UDM/UDR-class devices, select `PRESET=embedded` and check the effective decision cap. The supplied `docker-compose.yml` explicitly defaults `MAX_DECISIONS` to 40000, which overrides the embedded preset's 15000 default. Set `MAX_DECISIONS=15000` (or a device-tested lower limit) explicitly when using that Compose file on constrained hardware.
+
+For v4.0 readiness, choose `PRESET=server`, `max`, or `embedded` explicitly for preset-based deployments. Keep `PRESET` unset for explicit-only `BLOCKLISTS_OPT_IN=true` deployments. Review existing `ENABLE_*` overrides: they still win over preset defaults. Do not add an HTTPS CA path to an HTTP URL; the [TLS settings](#lapi-https-and-client-certificate-settings) above apply to HTTPS connections.
+
+---
+
+## Supported Blocklists
+
+crowdsec-blocklist-import pulls from 32 threat intelligence sources:
+
+| Source | Purpose | Type |
+|--------|---------|------|
+| **IPsum** | Aggregated threat intel (IPs on 3+ blocklists) | Aggregated |
+| **Spamhaus DROP** | Known hijacked networks | Network blocks |
+| **Blocklist.de** | SSH, web, mail attacks (all categories) | Attack vectors |
+| **Firehol Level 1/2/3** | Malware, C2, compromised hosts | Malware |
+| **Abuse.ch** | Feodo Tracker, URLhaus | Malware |
+| **Emerging Threats** | Compromised IP detection | Threats |
+| **Binary Defense** | Malware, DoS, botnet IPs | Malware |
+| **Bruteforce Blocker** | SSH/RDP brute force attacks | Attacks |
+| **DShield** | Top attacking IPs (Internet Storm Center) | Threats |
+| **CI Army** | Bad reputation hosts | Threats |
+| **AbuseIPDB** | Reported malicious IPs (public mirror; direct API optional) | Threats |
+| **Cybercrime Tracker** | Cybercrime infrastructure | Malware |
+| **VX Vault** | Malware hosting IPs | Malware |
+| **Botvrij** | Botnet C2 servers | Malware |
+| **GreenSnow** | Attacker IPs | Threats |
+| **StopForumSpam** | Forum spam sources | Spam |
+| **Sentinel** | Turris greylist (community-sourced threat intelligence) | Threats |
+| **Data-Shield IPv4** | Curated malicious IPv4 registry (duggytuxy; opt-in, off by default) | Threats |
+| **Tor Exit Nodes** | Tor network exit points | Privacy |
+| **Scanner IPs** | Shodan, Censys, Internet scanners | Scanners |
+
+For a complete list with URLs and threat types, see [Examples](docs/examples.md). You can also generate a current machine-readable table with `python blocklist_import.py --list-sources --format md`.
+
+---
+
+## CLI Usage
+
+```
+python blocklist_import.py [options]
+
+Options:
+  -h, --help                Show help
+  -v, --version             Show version and exit
+  -n, --dry-run             Preview without importing
+  -d, --debug               Enable debug logging
+  --setup                   Launch interactive setup wizard
+  --lapi-url URL            Override LAPI URL
+  --lapi-key KEY            Override LAPI key
+  --duration DURATION       Override decision duration
+  --batch-size SIZE         Override batch size
+  --list-sources            List all available blocklist sources
+  --format FORMAT           Output format for --list-sources: text (default) or md
+  --validate                Validate configuration and exit
+  --pushgateway-url URL     Override Prometheus Pushgateway URL
+  --no-metrics              Disable Prometheus metrics for this run
+  --interval SECONDS        Daemon mode: repeat every N seconds
+  --webhook-url URL         Webhook URL for notifications
+  --webhook-type TYPE       Webhook format: generic, discord, slack
+  --mode MODE               Filter blocklist sources regarding rate-limiting: all, frequent, limited
+  --impact-preview LOG...   Report-only: score feeds against IPs in your log files
+  --impact-preview-html P   Also write a self-contained graphical HTML report to P
+  --impact-preview-all-feeds  Preview every fetchable source, not just enabled ones
+```
+
+### Examples
+
+```bash
+# Launch interactive setup wizard
+python blocklist_import.py --setup
+
+# Dry-run to see what would be imported
+python blocklist_import.py --dry-run
+
+# List all available sources
+python blocklist_import.py --list-sources
+
+# Same list as a Markdown table, ready for docs
+python blocklist_import.py --list-sources --format md
+
+# Import with custom duration and batch size
+python blocklist_import.py --duration 48h --batch-size 500
+
+# Validate configuration without running
+python blocklist_import.py --validate
+
+# Impact preview: what would the feeds have caught in your own logs?
+# (report only - nothing is enabled or imported)
+python blocklist_import.py --impact-preview /var/log/nginx/access.log \
+    --impact-preview-html preview.html
+```
+
+---
+
+## Advanced Usage
+
+### Daemon Mode (Built-in Scheduler)
+
+Run as a long-lived service instead of using cron:
+
+```bash
+INTERVAL=3600         # Run every hour
+RUN_ON_START=false    # Skip the first run and wait for the interval
+CROWDSEC_HEARTBEAT_INTERVAL=60  # Keep cscli machines list heartbeat fresh
+```
+
+The daemon sends a machine heartbeat every 60 seconds by default, matching CrowdSec's own client behavior. Set `CROWDSEC_HEARTBEAT_INTERVAL=0` to disable it.
+
+The daemon handles SIGTERM/SIGINT gracefully -- it finishes the current run, then exits. This makes it Docker-friendly with `restart: unless-stopped`.
+
+### Impact Preview (Report Only)
+
+Before enabling a feed or a preset, see what it would have done against
+your own traffic:
+
+```bash
+python blocklist_import.py --impact-preview /var/log/nginx/access.log \
+    --impact-preview-html preview.html
+```
+
+The preview extracts IP addresses from any plain-text log (web server,
+firewall, `cscli alerts list -o json` piped through `jq`, a saved IP list),
+fetches the current feed contents, and reports per feed and per preset how
+many observed addresses each would have covered, how much of that coverage
+is unique, and how much overlaps other feeds. The HTML report renders the
+same numbers as charts. See [docs/impact-preview.md](docs/impact-preview.md).
+
+This is strictly report-only: it never contacts LAPI, never adds decisions,
+never changes feed configuration, and needs no `CROWDSEC_LAPI_KEY`. Log
+contents stay on your machine; only aggregate counts appear in the output.
+Allowlists are not applied, so import-time counts can only be lower. The
+HTML report contains a sample of matched addresses from your logs; treat it
+as sensitive and do not publish reports built from real logs.
+
+### Webhook Notifications
+
+Get notified after each import run:
+
+```bash
+# Discord
+WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK
+WEBHOOK_TYPE=discord
+
+# Slack
+WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+WEBHOOK_TYPE=slack
+
+# Generic JSON POST
+WEBHOOK_URL=https://your-endpoint.example.com/webhook
+WEBHOOK_TYPE=generic
+```
+
+### AbuseIPDB Direct API
+
+By default, `ENABLE_ABUSE_IPDB=true` fetches the **public mirror** (no API key needed). To use the direct API for higher rate limits and fresher data:
+
+```bash
+ABUSEIPDB_API_KEY=your_api_key_here
+# or ABUSEIPDB_API_KEY_FILE=your_api_key_file_path_here
+ABUSEIPDB_MIN_CONFIDENCE=90   # Only IPs with 90%+ confidence
+ABUSEIPDB_LIMIT=10000         # Max IPs to fetch
+```
+
+Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier allows 5 blacklist checks per day.
+
+> **Note:** The public mirror (via `ENABLE_ABUSE_IPDB`) and the direct API are complementary. When an API key is configured, both sources are queried and deduplicated.
+
+### Docker Secrets
+
+The following credential variables support file-backed injection. Use mounted secret files rather than inline production credentials, and provide either the value or its file variant:
+
+| Credential variable | File-backed variant | Purpose |
+|---------------------|---------------------|---------|
+| `CROWDSEC_LAPI_KEY` | `CROWDSEC_LAPI_KEY_FILE` | Bouncer API key for reading existing decisions |
+| `CROWDSEC_MACHINE_PASSWORD` | `CROWDSEC_MACHINE_PASSWORD_FILE` | Machine password for watcher login and writing decisions |
+| `ABUSEIPDB_API_KEY` | `ABUSEIPDB_API_KEY_FILE` | Optional AbuseIPDB API key |
+
+The file must exist and be readable inside the container. Docker Compose secrets, Swarm secrets, or Kubernetes Secret volume mounts can supply these paths; the importer reads the files, not the orchestration service. Protect the source files on the host as well.
+
+```yaml
+services:
+  blocklist-import:
+    image: ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+    environment:
+      - CROWDSEC_LAPI_KEY_FILE=/run/secrets/lapi_key
+      - CROWDSEC_MACHINE_PASSWORD_FILE=/run/secrets/machine_password
+    secrets:
+      - lapi_key
+      - machine_password
+
+secrets:
+  lapi_key:
+    file: ./secrets/lapi_key.txt
+  machine_password:
+    file: ./secrets/machine_password.txt
+```
+
+### Docker with Custom Config
+
+Mount your `.env` file:
+
+```bash
+docker run --rm \
+  --network crowdsec \
+  -v /path/to/.env:/app/.env:ro \
+  ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest
+```
+
+### Scheduling with Systemd Timer
+
+<details>
+<summary>Systemd service and timer unit files</summary>
+
+Create `/etc/systemd/system/blocklist-import.service`:
+
+```ini
+[Unit]
+Description=CrowdSec Blocklist Import
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=docker compose -f /opt/compose/blocklist-import.yml up --abort-on-container-exit
+StandardOutput=journal
+StandardError=journal
+```
+
+Create `/etc/systemd/system/blocklist-import.timer`:
+
+```ini
+[Unit]
+Description=CrowdSec Blocklist Import Timer
+Requires=blocklist-import.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now blocklist-import.timer
+```
+
+</details>
+
+For more examples, see [Advanced Usage](docs/examples.md).
+
+---
+
+## Monitoring
+
+### Prometheus Metrics
+
+Push metrics to Prometheus Pushgateway:
+
+```bash
+METRICS_PUSHGATEWAY_URL=http://prometheus:9091
+```
+
+Metrics tracked:
+- Total IPs imported per source
+- Deduplicated entries skipped
+- Failed imports per source
+- Import duration per run
+- Feed health per source (v3.9): last successful fetch timestamp, raw entry count, unique IP contribution, and HTTP status
+
+### Grafana Dashboard
+
+A pre-built Grafana dashboard is included at [`grafana-dashboard.json`](grafana-dashboard.json). Import it into Grafana to visualize import activity, deduplication rates, and feed health over time.
+
+---
+
+## Part of the CrowdSec UniFi Ecosystem
+
+crowdsec-blocklist-import works great with any CrowdSec setup. It also pairs perfectly with the UniFi-specific projects below for a complete detect → decide → enforce stack on UniFi hardware:
+
+| Project | Description |
+|---------|-------------|
+| [crowdsec-unifi-suite](https://github.com/wolffcatskyy/crowdsec-unifi-suite) | One-command installer for the full stack |
+| [crowdsec-unifi-bouncer](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer) | Enforce CrowdSec decisions on UniFi firewalls |
+| [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) | Parse UniFi firewall logs for CrowdSec |
+
+---
+
+## Troubleshooting
+
+### CrowdSec Connection Failed
+
+```bash
+# Verify LAPI is reachable
+curl http://crowdsec:8080/health
+
+# If using Docker, ensure containers share a network
+docker network inspect crowdsec
+```
+
+### Authentication Error
+
+```bash
+# Test bouncer key
+curl -H "X-Api-Key: YOUR_KEY" http://crowdsec:8080/decisions
+
+# Test TLS client certificate auth
+curl --cacert /certs/ca.pem \
+  --cert /certs/blocklist-import.pem \
+  --key /certs/blocklist-import-key.pem \
+  https://crowdsec:8080/v1/watchers/login \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id":"blocklist-import","password":"YourPassword","scenarios":["external/blocklist"]}'
+
+# Test machine login
+curl -X POST http://crowdsec:8080/watchers/login \
+  -H "Content-Type: application/json" \
+  -d '{"machine_id":"blocklist-import","password":"YourPassword"}'
+```
+
+### No IPs Imported
+
+```bash
+docker logs blocklist-import        # Docker logs
+python blocklist_import.py --debug  # Detailed output
+```
+
+Common causes:
+- All blocklists disabled (check `ENABLE_*` variables)
+- CrowdSec already has all IPs (check deduplication count in logs)
+- Network connectivity issue (check `curl https://example.com`)
+
+### Memory Issues
+
+```bash
+BATCH_SIZE=100          # Reduce from default 1000
+ENABLE_IPSUM=false      # IPsum is the largest feed
+```
+
+For more troubleshooting, see [FAQ](docs/faq.md).
+
+---
+
+## Technical Details
+
+| Attribute | Value |
+|-----------|-------|
+| **Language** | Python 3.9+ |
+| **Architecture** | Single-file, ~650 lines of production code |
+| **Dependencies** | `requests`, `python-dotenv` (+ optional `prometheus-client`) |
+| **Memory** | ~50-100 MB streaming processing (300k+ IPs) |
+| **Speed** | 500-1000 IPs/second depending on network and LAPI |
+| **Docker Image** | `ghcr.io/wolffcatskyy/crowdsec-blocklist-import:latest` (~85 MB) |
+| **Auth** | CrowdSec LAPI machine credentials (JWT) + bouncer key |
+
+---
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+- **Report bugs:** [GitHub Issues](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues)
+- **Suggest features:** [GitHub Discussions](https://github.com/wolffcatskyy/crowdsec-blocklist-import/discussions)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Roadmap:** [ROADMAP.md](ROADMAP.md)
+
+---
+
+## Contributors
+
+- [@gaelj](https://github.com/gaelj) — Major contributions including IP refresh before expiration, Grafana dashboard improvements, CI/CD pipeline, bug fixes, and [NixOS packaging](https://github.com/NixOS/nixpkgs/pull/486054)
+
+---
+
+## License
+
+MIT License -- See [LICENSE](LICENSE) for details.
+
+---
+
+## Credits
+
+**Maintained by** [wolffcatskyy](https://github.com/wolffcatskyy).
+
+**Special Thanks:**
+- [CrowdSec](https://www.crowdsec.net/) for the threat detection platform
+- The security community for maintaining public threat feeds
+- [Awesome CrowdSec](https://github.com/wolffcatskyy/awesome-crowdsec) community
+
+---
+
+<details>
+<summary>Security Advisory</summary>
+
+This is the official CrowdSec blocklist import tool maintained at [wolffcatskyy/crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import). If you downloaded this from another source or a different GitHub user, you may be using an impostor repository. Always verify you're using the official source.
+
+</details>

@@ -1,0 +1,3899 @@
+#!/usr/bin/env python3
+"""
+CrowdSec Blocklist Import - Python Edition
+
+A memory-efficient implementation that imports 28+ public threat feeds
+directly into CrowdSec via the LAPI HTTP API.
+
+Features:
+- Streaming downloads (no full file in memory)
+- Batch processing (configurable batch size)
+- IPv4 and IPv6 support
+- Automatic deduplication
+- Retry logic with exponential backoff
+- Full type hints
+- Per-source Prometheus metrics (status, IPs, duration, errors with message)
+
+Authors:
+
+- @wolffcatskyy (original author & maintainer)
+- @gaelj (key contributor: BlocklistSource refactor, CI, reliability fixes)
+
+License: MIT
+"""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import logging
+import os
+import platform
+import re
+import signal
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Generator, Optional, Set, Callable
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# Optional Prometheus metrics support
+try:
+    from prometheus_client import CollectorRegistry, Gauge, Histogram, push_to_gateway, delete_from_gateway
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
+
+# Optional dotenv support - not required if env vars are set directly
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv() -> None:
+        """Stub if python-dotenv is not installed."""
+        pass
+
+__version__ = "3.9.0"
+
+
+def get_lapi_user_agent() -> str:
+    """Return the User-Agent used when authenticating to CrowdSec LAPI."""
+    return f"crowdsec-blocklist-import/{__version__}"
+
+
+def _read_os_release(path: str = "/etc/os-release") -> dict[str, str]:
+    """Read os-release metadata when available."""
+    values: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"')
+    except OSError:
+        pass
+    return values
+
+
+def get_runtime_os_metadata() -> dict[str, str]:
+    """Return OS metadata in CrowdSec usage-metrics format."""
+    os_release = _read_os_release()
+    system_name = platform.system().lower() or "unknown"
+    os_name = os_release.get("ID") or os_release.get("NAME") or system_name
+    os_version = os_release.get("VERSION_ID") or platform.release() or ""
+    os_family = os_release.get("ID_LIKE", "").split(" ", 1)[0]
+    if not os_family:
+        os_family = os_release.get("ID", "") or system_name
+    return {
+        "name": os_name,
+        "family": os_family,
+        "version": os_version,
+    }
+
+
+# =============================================================================
+# Blocklist Sources
+# =============================================================================
+
+duration_pattern = re.compile(r'(\d+\.?\d*)\s*([dhms])')
+
+
+def parse_duration(duration_str: str) -> timedelta:
+    total_seconds = 0
+    duration_str = duration_str \
+        .replace("days", "d") \
+        .replace("hrs", "h") \
+        .replace("hr", "h") \
+        .replace("mns", "m") \
+        .replace("mn", "m") \
+        .replace("secs", "s") \
+        .replace("sec", "s")
+    for value, unit in duration_pattern.findall(duration_str):
+        seconds = float(value)
+        if unit == 'd':
+            seconds *= 86400
+        if unit == 'h':
+            seconds *= 3600
+        if unit == 'm':
+            seconds *= 60
+        total_seconds += seconds
+    return timedelta(seconds=total_seconds)
+
+
+def get_normal_headers(config: Config) -> dict[str, str]:
+    return {"User-Agent": f"crowdsec-blocklist-import/{__version__}"}
+
+
+def get_abuseipdb_api_headers(config: Config) -> Optional[dict[str, str]]:
+    return None if config.abuseipdb_api_key == "" else {
+        "User-Agent": f"crowdsec-blocklist-import/{__version__}",
+        "Key": config.abuseipdb_api_key,
+        "Accept": "text/plain",
+    }
+
+
+def get_normal_params(config: Config) -> dict[str, str]:
+    return {}
+
+
+def get_abuseipdb_api_params(config: Config) -> dict[str, str]:
+    return {
+        "confidenceMinimum": config.abuseipdb_min_confidence,
+        "limit": config.abuseipdb_limit,
+    }
+
+
+def get_normal_can_import(config: Config) -> bool:
+    return True
+
+
+def get_abuseipdb_api_can_import(config: Config) -> bool:
+    return config.abuseipdb_api_key is not None and config.abuseipdb_api_key != ""
+
+
+@dataclass
+class BlocklistSource:
+    """Represents a blocklist source."""
+    name: str
+    url: Optional[str] = None
+    preset_values: Optional[list[str]] = None  # Can be passed, instead of URL
+    enabled_key: Optional[str] = ""
+    comment_char: Optional[str] = "#"
+    extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
+    field_separator: Optional[str] = " "
+    rate_limited: Optional[bool] = False
+    api_key_name: Optional[str] = None
+    get_headers: Callable = field(default=None)
+    get_params: Callable = field(default=None)
+    get_can_import: Callable = field(default=None)
+    # Feed license metadata, surfaced by --list-sources so MSP/business users
+    # can filter feeds before enabling them. attribution_required and
+    # commercial_ok are tri-state: True / False / None (= unknown - verify
+    # with the feed provider before relying on it).
+    license: str = "unknown"
+    attribution_required: Optional[bool] = None
+    commercial_ok: Optional[bool] = None
+    license_note: str = ""
+
+    def __post_init__(self):
+        if self.get_headers is None:
+            self.get_headers = get_normal_headers
+        if self.get_params is None:
+            self.get_params = get_normal_params
+        if self.get_can_import is None:
+            self.get_can_import = get_normal_can_import
+
+
+# Define all blocklist sources
+BLOCKLIST_SOURCES: list[BlocklistSource] = [
+    # IPsum - aggregated threat intel (level 3+ = on 3+ lists)
+    BlocklistSource(
+        name="IPsum",
+        license="The Unlicense",
+        attribution_required=False,
+        commercial_ok=True,
+        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt",
+        enabled_key="enable_ipsum",
+    ),
+    # Spamhaus DROP
+    BlocklistSource(
+        name="Spamhaus DROP",
+        license="Spamhaus DROP terms",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="Free for any use including commercial; credit The Spamhaus Project and keep the date/copyright text with the data",
+        url="https://www.spamhaus.org/drop/drop.txt",
+        enabled_key="enable_spamhaus",
+        comment_char=";",
+        extract_field=0,
+    ),
+    # Blocklist.de
+    BlocklistSource(
+        name="Blocklist.de all",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
+        url="https://lists.blocklist.de/lists/all.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de SSH",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
+        url="https://lists.blocklist.de/lists/ssh.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de Apache",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
+        url="https://lists.blocklist.de/lists/apache.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    BlocklistSource(
+        name="Blocklist.de mail",
+        license="free service (blocklist.de)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Free volunteer-run service; no explicit license terms published",
+        url="https://lists.blocklist.de/lists/mail.txt",
+        enabled_key="enable_blocklist_de",
+    ),
+    # Firehol
+    BlocklistSource(
+        name="Firehol level1",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+        enabled_key="enable_firehol_level1",
+    ),
+    BlocklistSource(
+        name="Firehol level2",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset",
+        enabled_key="enable_firehol_level2",
+    ),
+    # Abuse.ch
+    BlocklistSource(
+        name="Feodo Tracker",
+        license="abuse.ch community data (fair use)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Community feeds are free under fair use; commercial/for-profit use may require the paid abuse.ch commercial API",
+        url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+        enabled_key="enable_abuse_ch",
+    ),
+    BlocklistSource(
+        name="URLhaus",
+        license="abuse.ch community data (fair use)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Community feeds are free under fair use; commercial/for-profit use may require the paid abuse.ch commercial API",
+        url="https://urlhaus.abuse.ch/downloads/text_online/",
+        enabled_key="enable_abuse_ch",
+    ),
+    # Other sources
+    BlocklistSource(
+        name="Emerging Threats",
+        license="BSD (ET Open ruleset)",
+        attribution_required=True,
+        commercial_ok=True,
+        url="https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
+        enabled_key="enable_emerging_threats",
+    ),
+    BlocklistSource(
+        name="Binary Defense",
+        license="ATIF terms (binarydefense.com)",
+        attribution_required=None,
+        commercial_ok=False,
+        license_note="Public use only; the feed may not be resold or used in products/services that charge fees",
+        url="https://www.binarydefense.com/banlist.txt",
+        enabled_key="enable_binary_defense",
+    ),
+    BlocklistSource(
+        name="Bruteforce Blocker",
+        license="free (danger.rulez.sk)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://danger.rulez.sk/projects/bruteforceblocker/blist.php",
+        enabled_key="enable_bruteforce_blocker",
+    ),
+    BlocklistSource(
+        name="DShield",
+        license="CC BY-NC-SA 4.0 (SANS ISC)",
+        attribution_required=True,
+        commercial_ok=False,
+        license_note="ISC terms allow use protecting your own company network; resale prohibited; formal license is CC BY-NC-SA 4.0",
+        url="https://www.dshield.org/block.txt",
+        enabled_key="enable_dshield",
+        extract_field=0,
+    ),
+    BlocklistSource(
+        name="CI Army",
+        license="free (cinsscore.com)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://cinsscore.com/list/ci-badguys.txt",
+        enabled_key="enable_ci_army",
+    ),
+    BlocklistSource(
+        name="Botvrij",
+        license="free (botvrij.eu)",
+        attribution_required=None,
+        commercial_ok=True,
+        license_note="Provider states the data is free ('It is free!'); use at your own risk",
+        url="https://www.botvrij.eu/data/ioclist.ip-dst.raw",
+        enabled_key="enable_botvrij",
+    ),
+    BlocklistSource(
+        name="GreenSnow",
+        license="free (greensnow.co)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://blocklist.greensnow.co/greensnow.txt",
+        enabled_key="enable_greensnow",
+    ),
+    BlocklistSource(
+        name="StopForumSpam",
+        license="Creative Commons (stopforumspam.com/license)",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="Use on commercial sites allowed; resale prohibited; license notice/link required on redistribution",
+        url="https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt",
+        enabled_key="enable_stopforumspam",
+    ),
+    # Tor exit nodes
+    BlocklistSource(
+        name="Tor exit nodes",
+        license="public data (Tor Project)",
+        attribution_required=False,
+        commercial_ok=True,
+        url="https://check.torproject.org/torbulkexitlist",
+        enabled_key="enable_tor",
+    ),
+    BlocklistSource(
+        name="Tor (dan.me.uk)",
+        license="free (dan.me.uk)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="dan.me.uk asks users to respect the 30-minute rate limit",
+        url="https://www.dan.me.uk/torlist/?exit",
+        enabled_key="enable_tor",
+        rate_limited=True,
+    ),
+    # Scanners
+    BlocklistSource(
+        name="Shodan scanners",
+        license="no explicit license (community gist)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://gist.githubusercontent.com/jfqd/4ff7fa70950626a11832a4bc39451c1c/raw",
+        enabled_key="enable_scanners",
+    ),
+    # AbuseIPDB 99% confidence (via borestad mirror)
+    BlocklistSource(
+        name="AbuseIPDB",
+        license="AbuseIPDB data via borestad mirror",
+        attribution_required=True,
+        commercial_ok=None,
+        license_note="Mirror credits AbuseIPDB; verify AbuseIPDB terms before commercial use or redistribution",
+        url="https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-1d.ipv4",
+        enabled_key="enable_abuse_ipdb",
+    ),
+    # Cybercrime Tracker C2 (FireHOL mirror)
+    BlocklistSource(
+        name="Cybercrime Tracker",
+        license="free via FireHOL mirror (cybercrime-tracker.net)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset",
+        enabled_key="enable_cybercrime_tracker",
+    ),
+    # DShield Top Attackers
+    BlocklistSource(
+        name="DShield Top Attackers",
+        license="CC BY-NC-SA 4.0 (SANS ISC)",
+        attribution_required=True,
+        commercial_ok=False,
+        license_note="ISC terms allow use protecting your own company network; resale prohibited; formal license is CC BY-NC-SA 4.0",
+        url="https://feeds.dshield.org/top10-2.txt",
+        enabled_key="enable_dshield",
+        extract_field=0,
+    ),
+    # Data-Shield IPv4 (duggytuxy) - opt-in per discussion #76. Distinct
+    # from the SANS ISC "DShield" feeds above despite the similar name.
+    BlocklistSource(
+        name="Data-Shield IPv4",
+        license="GPL-3.0-only",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="GPL-3.0 community blocklist by Duggy Tuxy (Laurent Minne); credit the Data-Shield IPv4 Blocklist Community on redistribution",
+        url="https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/main/prod_data-shield_ipv4_blocklist.txt",
+        enabled_key="enable_data_shield",
+    ),
+    # VXVault Malware (FireHOL mirror)
+    BlocklistSource(
+        name="VXVault",
+        license="free via FireHOL mirror (vxvault)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/vxvault.ipset",
+        enabled_key="enable_vxvault",
+    ),
+    # --- Tier 2 Extended Coverage Blocklists ---
+    # IPsum Level 4+ (higher confidence than existing level 3)
+    BlocklistSource(
+        name="IPsum level4",
+        license="The Unlicense",
+        attribution_required=False,
+        commercial_ok=True,
+        url="https://raw.githubusercontent.com/stamparm/ipsum/master/levels/4.txt",
+        enabled_key="enable_ipsum",
+    ),
+    # Firehol Level 3 (extended 30-day coverage)
+    BlocklistSource(
+        name="Firehol level3",
+        license="aggregated feed (FireHOL)",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="FireHOL aggregates third-party lists; some component lists carry their own licenses - verify components before commercial redistribution",
+        url="https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level3.netset",
+        enabled_key="enable_firehol_level3",
+    ),
+    # Maltrail mass scanners
+    BlocklistSource(
+        name="Maltrail scanners",
+        license="MIT (maltrail)",
+        attribution_required=False,
+        commercial_ok=True,
+        url="https://raw.githubusercontent.com/stamparm/maltrail/master/data/mass_scanner.txt",
+        enabled_key="enable_scanners",
+    ),
+    BlocklistSource(
+        name="Sentinel",
+        license="free (Turris Sentinel)",
+        attribution_required=None,
+        commercial_ok=None,
+        url="https://view.sentinel.turris.cz/greylist-data/greylist-latest.csv",
+        enabled_key="enable_sentinel",
+        extract_field=0,
+        field_separator=","
+    ),
+    BlocklistSource(
+        name="AbuseIPDB API",
+        license="AbuseIPDB API terms",
+        attribution_required=None,
+        commercial_ok=None,
+        license_note="Subject to the AbuseIPDB account plan and terms of service",
+        url="https://api.abuseipdb.com/api/v2/blacklist",
+        enabled_key="enable_abuse_ipdb",
+        rate_limited=True,
+        get_headers=get_abuseipdb_api_headers,
+        get_params=get_abuseipdb_api_params,
+        get_can_import=get_abuseipdb_api_can_import
+    ),
+    BlocklistSource(
+        name="Static scanner IPs (Censys)",
+        license="public scan data (Censys)",
+        attribution_required=None,
+        commercial_ok=True,
+        license_note="Censys scanner ranges are publicly documented",
+        preset_values=[
+            "192.35.168.0/23",
+            "162.142.125.0/24",
+            "74.120.14.0/24",
+            "167.248.133.0/24",
+        ],
+        enabled_key="enable_scanners",
+    ),
+]
+
+# =============================================================================
+# Feed Presets (PRESET=)
+# =============================================================================
+# Presets set the *default* for each feed switch. Explicit ENABLE_* values
+# always win over the preset, preserving existing configurations. PRESET takes
+# precedence over BLOCKLISTS_OPT_IN when both are set.
+#
+# Membership is keyed on enabled_key (the same granularity as ENABLE_* vars).
+#
+#   embedded - small, high-confidence set safe for UDM/UDR-class devices
+#              (issue #21: ~123K decisions crashed the UniFi Network app on a
+#              UDM; embedded stays in the ~15K range)
+#   server   - the legacy default set minus feeds with false-positive history
+#              (#26/#38: VXVault and Firehol level3 both caught GitHub/CDN
+#              ranges) and the Tor exit list (a policy choice, not threat intel)
+#   max      - everything on; the pre-v3.9 behaviour
+#
+# v3.9 introduces presets WITHOUT changing defaults: when neither PRESET nor
+# BLOCKLISTS_OPT_IN is set, the legacy all-on default still applies and a loud
+# deprecation warning is logged (and sent to the configured webhook) on every
+# run. v4.0.0 will make PRESET=server the no-config fallback.
+
+PRESET_NAMES: tuple[str, ...] = ("embedded", "server", "max")
+
+_EMBEDDED_FEEDS: set[str] = {
+    "enable_spamhaus",          # Spamhaus DROP
+    "enable_abuse_ch",          # Feodo Tracker + URLhaus
+    "enable_emerging_threats",  # Emerging Threats compromised-ips
+    "enable_ipsum",             # IPsum level 3+ and 4+
+}
+
+# Feeds the server preset leaves off (every other feed stays on).
+_SERVER_DISABLED_FEEDS: set[str] = {
+    "enable_firehol_level3",    # 30-day aggregate; FP history (#26, #38)
+    "enable_vxvault",           # FP history (#26, #38)
+    "enable_tor",               # policy choice, not threat intel
+}
+
+# Keys that stay off under every preset (dead upstream feeds). Explicit
+# ENABLE_* values can still turn them on.
+_ALWAYS_OFF_FEEDS: set[str] = {
+    # Hard-off feeds (upstream gone for good) land here - ignored even if a
+    # preset or env var enables them. Empty until the next dead feed.
+}
+
+# Explicit opt-in feeds: off under every default scheme - every preset
+# (including max), BLOCKLISTS_OPT_IN mode, and the legacy all-on default.
+# Only an explicit ENABLE_*=true turns them on. Data-Shield was promised
+# as disabled-by-default in discussion #76.
+_OPT_IN_FEEDS: set[str] = {
+    "enable_data_shield",       # Data-Shield IPv4 (duggytuxy)
+}
+
+
+# Default MAX_DECISIONS per preset. The embedded preset exists for the #21
+# crash (ipset overflow on UDM/UDR-class devices), so it also caps the total
+# decision count. An explicit MAX_DECISIONS value always wins, including 0
+# (unlimited).
+PRESET_MAX_DECISIONS: dict[str, int] = {
+    "embedded": 15000,
+}
+
+
+def preset_max_decisions_default(preset: str) -> int:
+    """Return the default MAX_DECISIONS for a preset (0 = unlimited)."""
+    return PRESET_MAX_DECISIONS.get(preset, 0)
+
+
+def preset_feed_default(preset: str, enabled_key: str) -> bool:
+    """Return the default for an enabled_key under the given preset."""
+    if enabled_key in _ALWAYS_OFF_FEEDS or enabled_key in _OPT_IN_FEEDS:
+        return False
+    if preset == "embedded":
+        return enabled_key in _EMBEDDED_FEEDS
+    if preset == "server":
+        return enabled_key not in _SERVER_DISABLED_FEEDS
+    # max: everything on
+    return True
+
+
+def presets_for_key(enabled_key: str) -> list[str]:
+    """Return the presets in which a feed is enabled by default."""
+    return [p for p in PRESET_NAMES if preset_feed_default(p, enabled_key)]
+
+
+# =============================================================================
+# Feed provenance in scenario names (SCENARIO_FORMAT=structured)
+# =============================================================================
+#
+# Structured scenario grammar, consumed by the crowdsec-unifi-bouncer sidecar:
+#
+#     <SCENARIO_PREFIX>/<feed-slug>/c<confidence>
+#     e.g. external/blocklist-import/spamhaus-drop/c95
+#
+# feed-slug:  lowercase ASCII letters/digits joined by single hyphens
+#             (see feed_slug()).
+# confidence: integer 0-100, how likely an entry from the feed is a real,
+#             current threat (low = more false-positive risk).
+# Consolidated alerts (CONSOLIDATE_ALERTS=true) are sent per feed in
+# structured mode, so each keeps its per-feed confidence. Only the legacy
+# format uses a single mixed <prefix>/all-sources alert with no confidence.
+#
+# The legacy format "<DECISION_SCENARIO> (<Feed Name>)" stays the default so
+# existing filters, dashboards and cscli queries keep working.
+
+SCENARIO_FORMATS = ("legacy", "structured")
+DEFAULT_SCENARIO_PREFIX = "external/blocklist-import"
+DEFAULT_FEED_CONFIDENCE = 50
+
+# Default confidence per feed slug. Starting points based on how each list is
+# built (curated/verified vs. automated honeypot reports vs. non-malicious
+# categories like Tor exits and research scanners). Override with
+# FEED_CONFIDENCE="slug=NN,slug=NN".
+FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
+    # 90-95: curated, few false positives (hijacked/criminal netblocks,
+    # confirmed C2, abuse.ch curated lists)
+    "spamhaus-drop": 95,
+    "feodo-tracker": 95,
+    "abuseipdb": 90,
+    "abuseipdb-api": 90,
+    "urlhaus": 90,
+    # 70-85: high-signal attack/C2 reports (ET compromised, FireHOL level 1,
+    # CINS, DShield top attackers) and consensus lists (IPsum level 4+)
+    "firehol-level1": 85,
+    "ipsum-level4": 85,
+    "emerging-threats": 85,
+    "dshield": 85,
+    "cybercrime-tracker": 80,
+    "dshield-top-attackers": 80,
+    "binary-defense": 75,
+    "ci-army": 75,
+    "firehol-level2": 75,
+    "botvrij": 70,
+    # 50-65: broad automated attack reports (Blocklist.de, IPsum at lower
+    # levels) and non-malicious scanner lists
+    "blocklist-de-ssh": 65,
+    "ipsum": 65,
+    "greensnow": 65,
+    "sentinel": 65,
+    "data-shield-ipv4": 65,
+    "bruteforce-blocker": 65,
+    "blocklist-de-all": 60,
+    "blocklist-de-apache": 55,
+    "blocklist-de-mail": 55,
+    "shodan-scanners": 50,
+    "maltrail-scanners": 50,
+    "static-scanner-ips-censys": 50,
+    # 20-40: noisier aggregated lists (FireHOL level 3/4, StopForumSpam,
+    # VXVault) and anonymity networks (Tor exits are not malicious per se)
+    "vxvault": 35,
+    "firehol-level3": 35,
+    "stopforumspam": 35,
+    "tor-exit-nodes": 25,
+    "tor-dan-me-uk": 25,
+}
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_VALID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def feed_slug(name: str) -> str:
+    """Normalize a feed name to a scenario-safe slug.
+
+    "Spamhaus DROP" -> "spamhaus-drop", "Tor (dan.me.uk)" -> "tor-dan-me-uk".
+    Must stay in sync with feed.Slugify in crowdsec-unifi-bouncer's sidecar.
+    """
+    return _SLUG_RE.sub("-", name.lower()).strip("-")
+
+
+def parse_feed_confidence(raw: str, logger: Optional[logging.Logger] = None) -> dict[str, int]:
+    """Parse FEED_CONFIDENCE ("slug=NN,Feed Name=NN") into {slug: confidence}.
+
+    Keys may be slugs or human feed names; values are clamped to 0-100.
+    Malformed entries are skipped with a warning.
+    """
+    result: dict[str, int] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, value = part.rpartition("=")
+        slug = feed_slug(key)
+        try:
+            conf = int(value.strip())
+        except ValueError:
+            conf = None
+        if not sep or not slug or conf is None:
+            if logger:
+                logger.warning(f"FEED_CONFIDENCE: ignoring malformed entry {part!r} (expected slug=0-100)")
+            continue
+        result[slug] = max(0, min(100, conf))
+    return result
+
+
+def feed_confidence(source_name: str, overrides: Optional[dict[str, int]] = None) -> int:
+    """Return the confidence (0-100) for a feed, applying overrides first."""
+    slug = feed_slug(source_name)
+    if overrides and slug in overrides:
+        return overrides[slug]
+    return FEED_CONFIDENCE_DEFAULTS.get(slug, DEFAULT_FEED_CONFIDENCE)
+
+
+def build_scenario(config: "Config", source_name: Optional[str]) -> str:
+    """Build the decision/alert scenario name for a feed.
+
+    source_name=None means a consolidated alert covering all sources
+    (legacy format only; structured mode consolidates per feed instead).
+    """
+    if config.scenario_format == "structured":
+        prefix = config.scenario_prefix.rstrip("/")
+        if source_name is None:
+            return f"{prefix}/all-sources"
+        conf = feed_confidence(source_name, config.feed_confidence)
+        return f"{prefix}/{feed_slug(source_name)}/c{conf}"
+    label = "all sources" if source_name is None else source_name
+    return f"{config.decision_scenario} ({label})"
+
+
+# =============================================================================
+# Environment Variable Validation
+# =============================================================================
+
+# All valid ENABLE_* environment variable names (canonical list)
+VALID_ENABLE_VARS: set[str] = {s.enabled_key.upper() for s in BLOCKLIST_SOURCES if s.enabled_key}
+
+# ENABLE_* variables whose feeds have been removed from the registry. They are
+# no longer valid toggles; setting one logs an explicit error naming the feed
+# as removed instead of a generic "unknown variable" warning, so the user
+# learns the feed is gone rather than silently getting nothing from it.
+REMOVED_ENABLE_VARS: dict[str, str] = {
+    "ENABLE_MONTY_SECURITY_C2": (
+        "the Monty Security C2 feed was removed - upstream deleted data/all.txt "
+        "and no replacement URL is confirmed (#80). The toggle does nothing; "
+        "remove it from your configuration."
+    ),
+}
+
+# Valid boolean string values (case-insensitive)
+VALID_BOOL_VALUES: set[str] = {"true", "false", "1", "0", "yes", "no", "on", "off"}
+
+
+class EnvValidationError(Exception):
+    """Raised when environment variable validation fails."""
+    pass
+
+
+def validate_bool_value(var_name: str, value: str) -> tuple[bool, Optional[str]]:
+    """
+    Validate that a value is a valid boolean string.
+
+    Returns (is_valid, error_message).
+    """
+    if value.lower() in VALID_BOOL_VALUES:
+        return True, None
+
+    return False, (
+        f"Invalid value for {var_name}: '{value}'\n"
+        f"  Expected one of: true, false, 1, 0, yes, no, on, off (case-insensitive)"
+    )
+
+
+def find_similar_vars(unknown_var: str, valid_vars: set[str]) -> list[str]:
+    """
+    Find similar variable names for typo suggestions.
+
+    Uses simple substring matching and edit distance approximation.
+    """
+    suggestions: list[str] = []
+    unknown_lower = unknown_var.lower()
+
+    for valid in valid_vars:
+        valid_lower = valid.lower()
+
+        # Exact substring match (missing/extra characters)
+        if unknown_lower in valid_lower or valid_lower in unknown_lower:
+            suggestions.append(valid)
+            continue
+
+        # Check for common typos (swapped characters, missing underscore, etc.)
+        # Remove underscores and compare
+        unknown_compact = unknown_lower.replace("_", "")
+        valid_compact = valid_lower.replace("_", "")
+
+        if unknown_compact == valid_compact:
+            suggestions.append(valid)
+            continue
+
+        # Check if most characters match (simple similarity)
+        common = sum(1 for c in unknown_compact if c in valid_compact)
+        if common >= len(valid_compact) * 0.7:
+            suggestions.append(valid)
+
+    return suggestions
+
+
+def validate_enable_env_vars(logger: Optional[logging.Logger] = None) -> tuple[bool, list[str]]:
+    """
+    Validate all ENABLE_* environment variables.
+
+    Checks:
+    1. All ENABLE_* vars have valid boolean values
+    2. Warns about unknown ENABLE_* vars (possible typos)
+
+    Returns (is_valid, list_of_errors).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for var_name, value in os.environ.items():
+        if not var_name.startswith("ENABLE_"):
+            continue
+
+        # Removed feeds: log an error naming the feed as removed
+        if var_name in REMOVED_ENABLE_VARS:
+            if logger:
+                logger.error(f"{var_name}={value} has no effect: {REMOVED_ENABLE_VARS[var_name]}")
+            continue
+
+        # Check if it's a known variable
+        if var_name not in VALID_ENABLE_VARS:
+            suggestions = find_similar_vars(var_name, VALID_ENABLE_VARS)
+
+            if suggestions:
+                suggestion_text = ", ".join(suggestions[:3])
+                warnings.append(
+                    f"Unknown environment variable: {var_name}={value}\n"
+                    f"  Did you mean: {suggestion_text}?"
+                )
+            else:
+                warnings.append(
+                    f"Unknown environment variable: {var_name}={value}\n"
+                    f"  This variable will be ignored. Check spelling or see available options below."
+                )
+        else:
+            # Validate the boolean value
+            is_valid, error = validate_bool_value(var_name, value)
+            if not is_valid and error:
+                errors.append(error)
+
+    # Log warnings (don't fail, just warn)
+    if logger and warnings:
+        for warning in warnings:
+            logger.warning(warning)
+
+    return len(errors) == 0, errors
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+@dataclass
+class Config:
+    """Configuration loaded from environment variables."""
+
+    # CrowdSec LAPI settings
+    lapi_url: str = "http://localhost:8080"
+    lapi_key: str = ""  # Bouncer API key (for reading decisions)
+    lapi_key_file: str = ""  # Bouncer API key file (for reading decisions)
+    lapi_ca_cert_path: str = ""  # CA certificate path for LAPI TLS verification
+    lapi_agent_cert_path: str = ""  # Agent client cert for JWT/write auth
+    lapi_agent_key_path: str = ""  # Agent client key for JWT/write auth
+    lapi_bouncer_cert_path: str = ""  # Bouncer client cert for decision reads
+    lapi_bouncer_key_path: str = ""  # Bouncer client key for decision reads
+
+    # Machine credentials (for writing decisions via /alerts endpoint)
+    # These are alternative to lapi_key for write operations
+    machine_id: str = ""
+    machine_password: str = ""
+    machine_password_file: str = ""
+
+    # Decision settings
+    decision_duration: str = "24h"
+    decision_reason: str = "external_blocklist"
+    decision_type: str = "ban"
+    decision_origin: str = "blocklist-import"
+    decision_scenario: str = "external/blocklist"
+    scenario_format: str = "legacy"  # "legacy" or "structured"
+    scenario_prefix: str = DEFAULT_SCENARIO_PREFIX
+    feed_confidence: Optional[dict[str, int]] = None  # slug -> 0-100 overrides
+
+    # Processing settings
+    allow_list: Optional[list[str]] = None
+    custom_block_lists: Optional[list[str]] = None
+    batch_size: int = 1000
+    fetch_timeout: int = 60
+    max_retries: int = 3
+    log_timestamps: bool = True
+
+    # IP refreshing time-spans: we refresh IPs that will soon expire before they do
+    refresh_period_frequent_mn: int = 60 + 2 * 15  # refresh period for non rate limited sources
+    refresh_period_limited_mn: int = 60 * 5 + 2 * 15  # refresh period for rate limited sources
+
+    # Logging
+    log_level: str = "INFO"
+
+    # Dry run mode
+    dry_run: bool = False
+
+    # Telemetry
+    telemetry_enabled: bool = True
+    telemetry_url: str = "https://bouncer-telemetry.ms2738.workers.dev/ping"
+
+    # Prometheus metrics
+    metrics_enabled: bool = True
+    pushgateway_url: str = "localhost:9091"
+
+    # Daemon mode (built-in scheduler)
+    interval: int = 0  # 0 = run once (default), >0 = repeat every N seconds
+    run_on_start: bool = True  # Run immediately on start, then wait for interval
+    heartbeat_interval: int = 60  # 0 = disabled, >0 = heartbeat every N seconds
+
+    # Webhook notifications
+    webhook_url: str = ""
+    webhook_type: str = "generic"  # generic, discord, slack
+
+    mode: str = "all"  # all, frequent, limited
+
+    # AbuseIPDB direct API
+    abuseipdb_api_key: str = ""
+    abuseipdb_api_key_file: str = ""
+    abuseipdb_min_confidence: int = 90
+    abuseipdb_limit: int = 10000
+
+    # Provider allowlists
+    allowlist_github: bool = False
+
+    # Alert consolidation (reduce CrowdSec console alert count)
+    consolidate_alerts: bool = False
+
+    # Maximum total decisions to submit (0 = unlimited)
+    max_decisions: int = 0
+
+    # Feed selection preset: "", "embedded", "server", or "max" (env PRESET)
+    preset: str = ""
+    # True when neither PRESET nor BLOCKLISTS_OPT_IN is configured: the legacy
+    # all-on defaults still apply, but every run logs a loud deprecation
+    # warning (and notifies the configured webhook) ahead of the v4.0.0 flip.
+    opt_in_deprecation: bool = False
+
+    # Exit non-zero when any enabled feed fails to fetch (default: false)
+    fail_on_dead_feed: bool = False
+
+    # Blocklist enables (all enabled by default except enable_data_shield,
+    # an explicit opt-in feed that stays off unless ENABLE_DATA_SHIELD=true)
+    enable_ipsum: bool = True
+    enable_spamhaus: bool = True
+    enable_blocklist_de: bool = True
+    enable_firehol: bool = True
+    enable_firehol_level1: bool = True
+    enable_firehol_level2: bool = True
+    enable_firehol_level3: bool = True
+    enable_abuse_ch: bool = True
+    enable_emerging_threats: bool = True
+    enable_binary_defense: bool = True
+    enable_bruteforce_blocker: bool = True
+    enable_dshield: bool = True
+    enable_ci_army: bool = True
+    enable_botvrij: bool = True
+    enable_greensnow: bool = True
+    enable_stopforumspam: bool = True
+    enable_tor: bool = True
+    enable_scanners: bool = True
+    enable_abuse_ipdb: bool = True
+    enable_cybercrime_tracker: bool = True
+    enable_vxvault: bool = True
+    enable_sentinel: bool = True
+    enable_data_shield: bool = False
+
+    @classmethod
+    def from_env(cls) -> Config:
+        """Load configuration from environment variables."""
+        load_dotenv()
+
+        def get_bool(key: str, default: bool = True) -> bool:
+            val = os.getenv(key, str(default)).lower()
+            return val in ("true", "1", "yes", "on")
+
+        def get_bool_or_none(key: str) -> Optional[bool]:
+            val = os.getenv(key)
+            if val is None:
+                return None
+            return val.lower() in ("true", "1", "yes", "on")
+
+        # Feed-default resolution order (explicit ENABLE_* values always win):
+        #   1. PRESET=embedded|server|max sets per-feed defaults
+        #   2. BLOCKLISTS_OPT_IN=true makes feeds opt-in (default off)
+        #   3. neither set: legacy all-on default + loud deprecation warning
+        #      (v4.0.0 will make PRESET=server the fallback instead)
+        preset = (os.getenv("PRESET") or "").strip().lower()
+        if preset and preset not in PRESET_NAMES:
+            raise EnvValidationError(
+                f"Invalid PRESET: '{preset}'\n"
+                f"  Expected one of: {', '.join(PRESET_NAMES)}"
+            )
+        blocklists_opt_in_set = os.getenv("BLOCKLISTS_OPT_IN") is not None
+        blocklists_opt_in = get_bool("BLOCKLISTS_OPT_IN", False)
+        opt_in_deprecation = not preset and not blocklists_opt_in_set
+
+        def feed_default(key: str) -> bool:
+            if key in _OPT_IN_FEEDS:
+                # explicit opt-in feeds stay off under every default scheme
+                return False
+            if preset:
+                return preset_feed_default(preset, key)
+            return not blocklists_opt_in
+
+        # Firehol master switch + optional per-level overrides.
+        # An explicitly-set master ENABLE_FIREHOL still governs every unset
+        # level; otherwise each level takes its own preset/opt-in default
+        # (so PRESET=server can disable level3 while keeping levels 1-2).
+        firehol_master_set = os.getenv("ENABLE_FIREHOL") is not None
+        firehol_master = get_bool("ENABLE_FIREHOL", feed_default("enable_firehol"))
+        fh_l1 = get_bool_or_none("ENABLE_FIREHOL_LEVEL1")
+        fh_l2 = get_bool_or_none("ENABLE_FIREHOL_LEVEL2")
+        fh_l3 = get_bool_or_none("ENABLE_FIREHOL_LEVEL3")
+        fh_l1_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level1")
+        fh_l2_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level2")
+        fh_l3_default = firehol_master if firehol_master_set else feed_default("enable_firehol_level3")
+
+        # MAX_DECISIONS: an explicit value always wins (0 = unlimited);
+        # otherwise the preset supplies the default (embedded caps at 15K).
+        max_decisions_raw = (os.getenv("MAX_DECISIONS") or "").strip()
+        if max_decisions_raw:
+            max_decisions = int(max_decisions_raw)
+        else:
+            max_decisions = preset_max_decisions_default(preset)
+
+        scenario_format = os.getenv("SCENARIO_FORMAT", "legacy").strip().lower()
+        if scenario_format not in SCENARIO_FORMATS:
+            logging.getLogger("blocklist-import").warning(
+                f"SCENARIO_FORMAT={scenario_format!r} is not one of {', '.join(SCENARIO_FORMATS)}; using legacy"
+            )
+            scenario_format = "legacy"
+        scenario_prefix = os.getenv("SCENARIO_PREFIX", DEFAULT_SCENARIO_PREFIX).strip().rstrip("/") \
+            or DEFAULT_SCENARIO_PREFIX
+
+        return cls(
+            lapi_url=os.getenv("CROWDSEC_LAPI_URL", "http://localhost:8080").rstrip("/"),
+            lapi_key=os.getenv("CROWDSEC_LAPI_KEY", ""),
+            lapi_key_file=os.getenv("CROWDSEC_LAPI_KEY_FILE", ""),
+            lapi_ca_cert_path=os.getenv("CROWDSEC_LAPI_CA_CERT_PATH", ""),
+            lapi_agent_cert_path=os.getenv("CROWDSEC_LAPI_AGENT_CERT_PATH", ""),
+            lapi_agent_key_path=os.getenv("CROWDSEC_LAPI_AGENT_KEY_PATH", ""),
+            lapi_bouncer_cert_path=os.getenv("CROWDSEC_LAPI_BOUNCER_CERT_PATH", ""),
+            lapi_bouncer_key_path=os.getenv("CROWDSEC_LAPI_BOUNCER_KEY_PATH", ""),
+            machine_id=os.getenv("CROWDSEC_MACHINE_ID", ""),
+            machine_password=os.getenv("CROWDSEC_MACHINE_PASSWORD", ""),
+            machine_password_file=os.getenv("CROWDSEC_MACHINE_PASSWORD_FILE", ""),
+            decision_duration=os.getenv("DECISION_DURATION", "24h"),
+            decision_reason=os.getenv("DECISION_REASON", "external_blocklist"),
+            decision_type=os.getenv("DECISION_TYPE", "ban"),
+            decision_origin=os.getenv("DECISION_ORIGIN", "blocklist-import"),
+            decision_scenario=os.getenv("DECISION_SCENARIO", "external/blocklist"),
+            scenario_format=scenario_format,
+            scenario_prefix=scenario_prefix,
+            feed_confidence=parse_feed_confidence(
+                os.getenv("FEED_CONFIDENCE", ""), logging.getLogger("blocklist-import")
+            ),
+            allow_list=[x.strip() for x in os.getenv("ALLOWLIST", "").split(",") if x.strip()],
+            allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
+            custom_block_lists=[x.strip() for x in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if x.strip()],
+            refresh_period_frequent_mn=int(os.getenv("REFRESH_PERIOD_FREQUENT_MN", "90")),
+            refresh_period_limited_mn=int(os.getenv("REFRESH_PERIOD_LIMITED_MN", "330")),
+            batch_size=int(os.getenv("BATCH_SIZE", "1000")),
+            fetch_timeout=int(os.getenv("FETCH_TIMEOUT", "60")),
+            max_retries=int(os.getenv("MAX_RETRIES", "3")),
+            log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            log_timestamps=get_bool("LOG_TIMESTAMPS"),
+            dry_run=get_bool("DRY_RUN", False),
+            telemetry_enabled=get_bool("TELEMETRY_ENABLED", True),
+            telemetry_url=os.getenv("TELEMETRY_URL", "https://bouncer-telemetry.ms2738.workers.dev/ping"),
+            metrics_enabled=get_bool("METRICS_ENABLED", True) and not get_bool("NO_METRICS", False),
+            pushgateway_url=os.getenv("METRICS_PUSHGATEWAY_URL", "localhost:9091"),
+            interval=int(os.getenv("INTERVAL", "0")),
+            run_on_start=get_bool("RUN_ON_START", True),
+            heartbeat_interval=int(os.getenv("CROWDSEC_HEARTBEAT_INTERVAL", "60")),
+            webhook_url=os.getenv("WEBHOOK_URL", ""),
+            webhook_type=os.getenv("WEBHOOK_TYPE", "generic").lower(),
+            abuseipdb_api_key=os.getenv("ABUSEIPDB_API_KEY", ""),
+            abuseipdb_api_key_file=os.getenv("ABUSEIPDB_API_KEY_FILE", ""),
+            abuseipdb_min_confidence=int(os.getenv("ABUSEIPDB_MIN_CONFIDENCE", "90")),
+            abuseipdb_limit=int(os.getenv("ABUSEIPDB_LIMIT", "10000")),
+            consolidate_alerts=get_bool("CONSOLIDATE_ALERTS", False),
+            max_decisions=max_decisions,
+            preset=preset,
+            opt_in_deprecation=opt_in_deprecation,
+            fail_on_dead_feed=get_bool("FAIL_ON_DEAD_FEED", False),
+            enable_ipsum=get_bool("ENABLE_IPSUM", feed_default("enable_ipsum")),
+            enable_spamhaus=get_bool("ENABLE_SPAMHAUS", feed_default("enable_spamhaus")),
+            enable_blocklist_de=get_bool("ENABLE_BLOCKLIST_DE", feed_default("enable_blocklist_de")),
+            enable_firehol=firehol_master,
+            enable_firehol_level1=fh_l1 if fh_l1 is not None else fh_l1_default,
+            enable_firehol_level2=fh_l2 if fh_l2 is not None else fh_l2_default,
+            enable_firehol_level3=fh_l3 if fh_l3 is not None else fh_l3_default,
+            enable_abuse_ch=get_bool("ENABLE_ABUSE_CH", feed_default("enable_abuse_ch")),
+            enable_emerging_threats=get_bool("ENABLE_EMERGING_THREATS", feed_default("enable_emerging_threats")),
+            enable_binary_defense=get_bool("ENABLE_BINARY_DEFENSE", feed_default("enable_binary_defense")),
+            enable_bruteforce_blocker=get_bool("ENABLE_BRUTEFORCE_BLOCKER", feed_default("enable_bruteforce_blocker")),
+            enable_dshield=get_bool("ENABLE_DSHIELD", feed_default("enable_dshield")),
+            enable_ci_army=get_bool("ENABLE_CI_ARMY", feed_default("enable_ci_army")),
+            enable_botvrij=get_bool("ENABLE_BOTVRIJ", feed_default("enable_botvrij")),
+            enable_greensnow=get_bool("ENABLE_GREENSNOW", feed_default("enable_greensnow")),
+            enable_stopforumspam=get_bool("ENABLE_STOPFORUMSPAM", feed_default("enable_stopforumspam")),
+            enable_tor=get_bool("ENABLE_TOR", feed_default("enable_tor")),
+            enable_scanners=get_bool("ENABLE_SCANNERS", feed_default("enable_scanners")),
+            enable_abuse_ipdb=get_bool("ENABLE_ABUSE_IPDB", feed_default("enable_abuse_ipdb")),
+            enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default("enable_cybercrime_tracker")),
+            enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default("enable_vxvault")),
+            enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel")),
+            enable_data_shield=get_bool("ENABLE_DATA_SHIELD", feed_default("enable_data_shield"))
+        )
+
+
+def _tristate(value: Optional[bool]) -> str:
+    """Render a tri-state license field for display."""
+    return {True: "yes", False: "no"}.get(value, "unknown")
+
+
+def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
+    """Print a formatted list of all available blocklist sources.
+
+    Includes preset membership and license metadata (license,
+    attribution_required, commercial_ok) so MSP/business users can filter
+    feeds by licensing terms before enabling them.
+    """
+    # Group sources by their enable key
+    sources_by_key: dict[str, list[BlocklistSource]] = {}
+    for source in BLOCKLIST_SOURCES:
+        env_var = source.enabled_key.upper()
+        if env_var not in sources_by_key:
+            sources_by_key[env_var] = []
+        sources_by_key[env_var].append(source)
+
+    total = sum(len(names) for names in sources_by_key.values())
+
+    if fmt == "md":
+        # Docs-ready table; printed without log decoration so the output can be
+        # piped straight into documentation:
+        #   python blocklist_import.py --list-sources --format md > docs/feeds.md
+        print("| Feed | Enable variable | Presets | License | Attribution required | Commercial OK |")
+        print("|------|-----------------|---------|---------|----------------------|---------------|")
+        for env_var in sorted(sources_by_key.keys()):
+            for source in sources_by_key[env_var]:
+                presets = ",".join(presets_for_key(source.enabled_key)) or "none"
+                print(
+                    f"| {source.name} | `{env_var}` | {presets} | {source.license} | "
+                    f"{_tristate(source.attribution_required)} | {_tristate(source.commercial_ok)} |"
+                )
+        print()
+        print(f"**{total} feeds across {len(sources_by_key)} enable variables.**")
+        return
+
+    logger.info("Available blocklist sources:")
+    logger.info("")
+
+    # Print each group
+    for env_var in sorted(sources_by_key.keys()):
+        sources = sources_by_key[env_var]
+        current_value = os.getenv(env_var, "true").lower()
+        status = "enabled" if current_value in ("true", "1", "yes", "on") else "disabled"
+
+        logger.info(f"  {env_var} ({status}):")
+        for source in sources:
+            presets = ",".join(presets_for_key(source.enabled_key)) or "none"
+            logger.info(f"    - {source.name}")
+            logger.info(f"        presets: {presets}")
+            logger.info(
+                f"        license: {source.license} | "
+                f"attribution_required: {_tristate(source.attribution_required)} | "
+                f"commercial_ok: {_tristate(source.commercial_ok)}"
+            )
+            if source.license_note:
+                logger.info(f"        note: {source.license_note}")
+
+    logger.info("")
+
+
+# =============================================================================
+# Prometheus Metrics — error message sanitization
+# =============================================================================
+
+# Fixed-category error message labels to bound Prometheus label cardinality.
+# Raw exception strings (containing hostnames, ports, retry counts, etc.)
+# must NEVER be used directly as label values — doing so creates a new time
+# series per unique string and causes storage bloat in the Pushgateway (issue #3).
+#
+# Every call-site that records an error MUST pass the exception through
+# sanitize_error_message() before using it as a label value.
+
+_ERROR_PATTERNS: list[tuple[str, str]] = [
+    # requests / urllib3 transport errors -- checked against class name first
+    ("ConnectionError", "connection_error"),
+    ("ConnectTimeout", "connect_timeout"),
+    ("ReadTimeout", "read_timeout"),
+    ("Timeout", "timeout"),
+    ("SSLError", "ssl_error"),
+    ("TooManyRedirects", "too_many_redirects"),
+    ("ChunkedEncodingError", "chunked_encoding_error"),
+    ("ContentDecodingError", "content_decoding_error"),
+    # HTTP status codes embedded in HTTPError messages
+    ("404", "http_404"),
+    ("403", "http_403"),
+    ("429", "http_429"),
+    ("500", "http_500"),
+    ("502", "http_502"),
+    ("503", "http_503"),
+    ("504", "http_504"),
+    ("HTTPError", "http_error"),
+    # Misc
+    ("UnicodeDecodeError", "unicode_decode_error"),
+    ("JSONDecodeError", "json_decode_error"),
+    ("ValueError", "value_error"),
+]
+
+
+def sanitize_error_message(exc: Exception) -> str:
+    """
+    Convert an exception into a fixed-category string safe for use as a
+    Prometheus label value.
+
+    Iterates through a priority-ordered list of known patterns (class name
+    substrings and HTTP status codes). Returns the first match, or the
+    exception *class name* as a stable fallback.
+
+    Never returns the raw str(exc), which may contain hostnames, ports,
+    retry counts, or other unbounded content that would create a new
+    Prometheus time series on every run (issue #3).
+    """
+    exc_type = type(exc).__name__
+    exc_str = str(exc)
+
+    for pattern, category in _ERROR_PATTERNS:
+        if pattern in exc_type or pattern in exc_str:
+            return category
+
+    # Fallback: exception class name — finite and stable across runs
+    return exc_type[:64]
+
+
+# =============================================================================
+# Prometheus Metrics
+# =============================================================================
+
+class MetricsCollector:
+    """
+    Prometheus metrics collector for blocklist import.
+
+    Per-source granularity:
+      - blocklist_import_source_status{source}
+            Gauge: 1 = success, 0 = failed.
+            Success/failure is encoded as the *value*, not a label (issue #4).
+      - blocklist_import_source_ips{source}               new IPs fetched per source
+      - blocklist_import_source_refreshed_ips{source}     refreshed IPs fetched per source
+      - blocklist_import_source_duration_seconds{source}  fetch time per source
+      - blocklist_import_errors_total{error_type, source, message}
+            error_type: "fetch" | "parse" | "import" | "encoding"  (issue #5)
+            message: sanitized fixed-category string — never raw exception text,
+            to keep label cardinality bounded (issue #3).
+
+    Aggregate gauges (for stat panels / success-rate):
+      - blocklist_import_total_ips
+      - blocklist_import_new_ips
+      - blocklist_import_refreshed_ips
+      - blocklist_import_existing_decisions
+      - blocklist_import_encoding_errors_total            (issue #5)
+      - blocklist_import_sources_enabled / _successful / _failed
+      - blocklist_import_last_run_timestamp
+      - blocklist_import_duration_seconds (histogram)
+
+    Stale-gauge strategy (issue #6):
+      The CollectorRegistry is re-created fresh for every run, and
+      delete_from_gateway() is called before push_to_gateway(). This ensures
+      that error/source metrics from a prior run that do not recur are
+      removed from the Pushgateway rather than persisting indefinitely.
+    """
+
+    def __init__(self, pushgateway_url: Optional[str] = None, logger: Optional[logging.Logger] = None):
+        self.pushgateway_url = pushgateway_url  # e.g., "localhost:9091"
+        self.logger = logger or logging.getLogger("blocklist-import")
+        # Fresh registry per run — prevents stale label combinations from
+        # lingering in the Pushgateway across runs (issue #6).
+
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            self.logger.warning(
+                "prometheus-client not installed. Metrics disabled. "
+                "Install with: pip install prometheus-client"
+            )
+            return
+
+        self.registry = CollectorRegistry()  # type: ignore
+
+        # Gauge: Total IPs currently imported
+        self.total_ips = Gauge(  # type: ignore
+            "blocklist_import_total_ips",
+            "Total number of IPs imported in the last run",
+            registry=self.registry,
+        )
+
+        self.refreshed_ips = Gauge(  # type: ignore
+            "blocklist_import_refreshed_ips",
+            "Number of refreshed IPs in the last run",
+            registry=self.registry,
+        )
+
+        # Gauge: Unix timestamp of last successful run
+        self.last_run_timestamp = Gauge(  # type: ignore
+            "blocklist_import_last_run_timestamp",
+            "Unix timestamp of the last import run",
+            registry=self.registry,
+        )
+
+        # Gauge: Number of enabled blocklist sources
+        self.sources_enabled = Gauge(  # type: ignore
+            "blocklist_import_sources_enabled",
+            "Number of enabled blocklist sources",
+            registry=self.registry,
+        )
+
+        # Per-error detail.
+        # error_type = "fetch" | "parse" | "import" | "encoding"
+        # source      = BlocklistSource.name  (stable, human-readable)
+        # message     = sanitized fixed-category string — never raw exception text.
+        #               See sanitize_error_message() for the full category list.
+        self.errors_total = Gauge(  # type: ignore
+            "blocklist_import_errors_total",
+            "Import errors labelled by type, source, and sanitized message category. "
+            "message values are fixed categories (not raw exception strings) to bound cardinality.",
+            ["error_type", "source", "message"],
+            registry=self.registry,
+        )
+
+        self.duration_seconds = Histogram(  # type: ignore
+            "blocklist_import_duration_seconds",
+            "Duration of full import run in seconds",
+            buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+            registry=self.registry,
+        )
+
+        self.sources_ok = Gauge(  # type: ignore
+            "blocklist_import_sources_successful",
+            "Number of sources successfully fetched in the last run",
+            registry=self.registry,
+        )
+
+        self.sources_failed = Gauge(  # type: ignore
+            "blocklist_import_sources_failed",
+            "Number of sources that failed to fetch in the last run",
+            registry=self.registry,
+        )
+
+        self.existing_decisions = Gauge(  # type: ignore
+            "blocklist_import_existing_decisions",
+            "Number of existing CrowdSec decisions found",
+            registry=self.registry,
+        )
+
+        self.new_ips = Gauge(  # type: ignore
+            "blocklist_import_new_ips",
+            "Number of new unique IPs added in the last run",
+            registry=self.registry,
+        )
+
+        self.source_refreshed_ips = Gauge(  # type: ignore
+            "blocklist_import_source_refreshed_ips",
+            "Number of unique refreshed IPs fetched from each source in the last run",
+            ["source"],
+            registry=self.registry,
+        )
+
+        # Encoding errors were tracked in stats but previously invisible in
+        # Prometheus. Now exposed as a top-level gauge
+        self.encoding_errors_total = Gauge(  # type: ignore
+            "blocklist_import_encoding_errors_total",
+            "Total number of lines skipped due to encoding errors across all sources",
+            registry=self.registry,
+        )
+
+        # Per-source granular metrics.
+        # source_status value: 1 = success, 0 = failed.
+        # There is intentionally NO 'status' label — value encodes the state
+        self.source_status = Gauge(  # type: ignore
+            "blocklist_import_source_status",
+            "Per-source fetch status: 1=success, 0=failed",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_ips = Gauge(  # type: ignore
+            "blocklist_import_source_ips",
+            "Number of unique new IPs fetched from each source in the last run",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_duration_seconds = Gauge(  # type: ignore
+            "blocklist_import_source_duration_seconds",
+            "Time taken to fetch and parse each source (seconds)",
+            ["source"],
+            registry=self.registry,
+        )
+
+        # Feed-health gauges (v3.9): last success, raw entry count, unique
+        # contribution, and HTTP status per source.
+        self.source_last_success_timestamp = Gauge(  # type: ignore
+            "blocklist_import_source_last_success_timestamp",
+            "Unix timestamp of each source's last successful fetch",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_entries = Gauge(  # type: ignore
+            "blocklist_import_source_entries",
+            "Raw number of entries each source published in the last run",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_unique_contribution = Gauge(  # type: ignore
+            "blocklist_import_source_unique_contribution",
+            "New unique IPs each source contributed in the last run "
+            "(after dedup against existing decisions and earlier sources)",
+            ["source"],
+            registry=self.registry,
+        )
+
+        self.source_http_status = Gauge(  # type: ignore
+            "blocklist_import_source_http_status",
+            "HTTP status code of each source's last fetch "
+            "(0 = transport-level failure, -1 = no HTTP request made)",
+            ["source"],
+            registry=self.registry,
+        )
+
+    # ------------------------------------------------------------------
+    # Per-source helpers — called directly from fetch_blocklist / run_import
+    # ------------------------------------------------------------------
+
+    def record_source_success(self, source_name: str, new_ip_count: int, refreshed_ip_count: int, duration: float,
+                              http_status: Optional[int] = None, entry_count: int = 0) -> None:
+        """Record a successful source fetch, including feed-health gauges."""
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            return
+        self.source_status.labels(source=source_name).set(1)
+        self.source_ips.labels(source=source_name).set(new_ip_count)
+        self.source_refreshed_ips.labels(source=source_name).set(refreshed_ip_count)
+        self.source_duration_seconds.labels(source=source_name).set(duration)
+        self.source_last_success_timestamp.labels(source=source_name).set(time.time())
+        self.source_entries.labels(source=source_name).set(entry_count)
+        self.source_unique_contribution.labels(source=source_name).set(new_ip_count)
+        self.source_http_status.labels(source=source_name).set(
+            http_status if http_status is not None else -1
+        )
+
+    def record_source_failure(self, source_name: str, error_type: str,
+                              exc: Optional[Exception], duration: float,
+                              http_status: Optional[int] = None) -> None:
+        """
+        Record a failed source fetch.
+
+        exc is sanitized to a fixed category string before being stored as a
+        label value — never use str(exc) directly (issue #3).
+        """
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            return
+        self.source_status.labels(source=source_name).set(0)
+        self.source_ips.labels(source=source_name).set(0)
+        self.source_refreshed_ips.labels(source=source_name).set(0)
+        self.source_duration_seconds.labels(source=source_name).set(duration)
+        self.source_entries.labels(source=source_name).set(0)
+        self.source_unique_contribution.labels(source=source_name).set(0)
+        self.source_http_status.labels(source=source_name).set(
+            http_status if http_status is not None else 0
+        )
+        short_msg = sanitize_error_message(exc) if isinstance(exc, Exception) else (str(exc)[:64] if exc else "unknown")
+        self.errors_total.labels(
+            error_type=error_type,
+            source=source_name,
+            message=short_msg,
+        ).set(1)
+
+    def record_parse_errors(self, source_name: str, errors: dict[str, int]) -> None:
+        """
+        Record per-source parse errors.
+
+        Bad token strings are truncated to 64 chars. Unlike exception
+        messages, parse tokens are naturally bounded per source.
+        """
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url or not errors:
+            return
+        for bad_token, count in errors.items():
+            short_token = bad_token[:120]
+            self.errors_total.labels(
+                error_type="parse",
+                source=source_name,
+                message=short_token,
+            ).set(count)
+
+    def record_encoding_errors(self, count: int) -> None:
+        """
+        Record the aggregate encoding error count (issue #5).
+
+        Previously these were tracked in ImportStats and logged but never
+        surfaced in Prometheus. Now visible as blocklist_import_encoding_errors_total.
+        """
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url or count == 0:
+            return
+        self.encoding_errors_total.set(count)
+
+    # ------------------------------------------------------------------
+    # End-of-run aggregate update
+    # ------------------------------------------------------------------
+
+    def update_aggregates(self, stats: ImportStats, enabled_count: int) -> None:
+        """Update scalar/aggregate gauges at end of run."""
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            return
+        self.total_ips.set(stats.total_ips)
+        self.new_ips.set(stats.new_ips)
+        self.refreshed_ips.set(stats.refreshed_ips)
+        self.last_run_timestamp.set(time.time())
+
+        self.sources_enabled.set(enabled_count)
+        self.sources_ok.set(stats.sources_ok)
+        self.sources_failed.set(stats.sources_failed)
+
+        self.existing_decisions.set(stats.existing_skipped)
+        self.duration_seconds.observe(stats.duration_seconds)
+
+        self.record_encoding_errors(stats.encoding_errors)
+
+    def push(self) -> bool:
+        """
+        Push all metrics to the Pushgateway.
+
+        Calls delete_from_gateway() first to remove any label combinations
+        from previous runs that are not present in the current run. Without
+        this, resolved errors and disabled sources would persist in the
+        Pushgateway indefinitely (issue #6).
+        """
+        if not PROMETHEUS_AVAILABLE or not self.pushgateway_url:
+            return False
+        try:
+            # Remove stale time series from the previous run.
+            # Non-fatal: if deletion fails we warn but still push, which will
+            # overwrite any series present in both runs.
+            try:
+                delete_from_gateway(  # type: ignore
+                    self.pushgateway_url,
+                    job="crowdsec-blocklist-import",
+                )
+            except Exception as del_exc:
+                self.logger.warning(
+                    f"Could not delete stale metrics from Pushgateway "
+                    f"({self.pushgateway_url}): {del_exc}"
+                )
+
+            push_to_gateway(  # type: ignore
+                self.pushgateway_url,
+                job="crowdsec-blocklist-import",
+                registry=self.registry,
+            )
+            self.logger.info(f"Metrics pushed to Pushgateway at {self.pushgateway_url}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to push metrics to {self.pushgateway_url}: {e}")
+            return False
+
+
+# Global metrics instance (initialized in main)
+_metrics: Optional[MetricsCollector] = None
+
+
+def get_metrics() -> Optional[MetricsCollector]:
+    """Get the global metrics collector instance."""
+    return _metrics
+
+
+def init_metrics(pushgateway_url: str, logger: logging.Logger) -> MetricsCollector:
+    """Initialize the global metrics collector."""
+    global _metrics
+    _metrics = MetricsCollector(pushgateway_url=pushgateway_url, logger=logger)
+    return _metrics
+
+
+# =============================================================================
+# IP Validation
+# =============================================================================
+
+# Private/reserved IP ranges to exclude
+PRIVATE_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("255.255.255.255/32"),
+    ipaddress.ip_network("100.64.0.0/10"),  # Carrier-grade NAT
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local
+    ipaddress.ip_network("224.0.0.0/4"),  # Multicast
+    ipaddress.ip_network("240.0.0.0/4"),  # Reserved
+    # IPv6 private ranges
+    ipaddress.ip_network("::1/128"),  # Loopback
+    ipaddress.ip_network("fc00::/7"),  # Unique local
+    ipaddress.ip_network("fe80::/10"),  # Link-local
+    ipaddress.ip_network("ff00::/8"),  # Multicast
+    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6
+]
+
+# Well-known IPs to exclude (DNS resolvers, etc.)
+EXCLUDED_IPS: Set[str] = {
+    "1.0.0.1", "1.1.1.1",  # Cloudflare
+    "8.8.8.8", "8.8.4.4",  # Google
+    "9.9.9.9",  # Quad9
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+}
+
+
+# =============================================================================
+# Allowlist with CIDR Support
+# =============================================================================
+
+# GitHub meta API URL for fetching their IP ranges
+GITHUB_META_URL = "https://api.github.com/meta"
+GITHUB_META_SECTIONS = ["git", "web", "api", "hooks", "actions"]
+
+# Fallback GitHub ranges if the API is unreachable
+GITHUB_FALLBACK_RANGES = [
+    "140.82.112.0/20",
+    "185.199.108.0/22",
+    "192.30.252.0/22",
+    "143.55.64.0/20",
+]
+
+
+class Allowlist:
+    """
+    CIDR-aware allowlist for filtering IPs.
+
+    Supports both individual IPs and CIDR ranges. Uses Python's ipaddress
+    module for proper containment checks. Individual IPs are stored in a set
+    for O(1) lookup; CIDR networks are checked via containment.
+
+    To keep performance reasonable, CIDR networks are stored in a sorted list
+    and checked sequentially. For typical allowlist sizes (dozens to hundreds
+    of entries), this is fast enough. The individual IPs set provides a fast
+    path for the common case.
+    """
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        self._exact_ips: Set[str] = set()
+        self._networks_v4: list[ipaddress.IPv4Network] = []
+        self._networks_v6: list[ipaddress.IPv6Network] = []
+        self._logger = logger or logging.getLogger("blocklist-import")
+
+    @property
+    def exact_ips(self) -> Set[str]:
+        return self._exact_ips
+
+    @property
+    def networks_v4(self) -> Set[str]:
+        return self._networks_v4
+
+    @property
+    def networks_v6(self) -> Set[str]:
+        return self._networks_v6
+
+    @property
+    def entry_count(self) -> int:
+        """Total number of allowlist entries (IPs + networks)."""
+        return len(self.exact_ips) + len(self.networks_v4) + len(self.networks_v6)
+
+    def add_entry(self, entry: str) -> None:
+        """
+        Add an IP or CIDR range to the allowlist.
+
+        Args:
+            entry: An IP address (e.g., "1.2.3.4") or CIDR range (e.g., "140.82.112.0/20")
+        """
+        entry = entry.strip()
+        if not entry:
+            return
+
+        try:
+            if "/" in entry:
+                network = ipaddress.ip_network(entry, strict=False)
+                if isinstance(network, ipaddress.IPv4Network):
+                    self.networks_v4.append(network)
+                else:
+                    self.networks_v6.append(network)
+            else:
+                # Validate it's a real IP, then store as string for fast lookup
+                ipaddress.ip_address(entry)
+                self.exact_ips.add(entry)
+        except (ValueError, TypeError) as e:
+            self._logger.warning(f"Invalid allowlist entry '{entry}': {e}")
+
+    def add_entries(self, entries: list[str]) -> None:
+        """Add multiple entries to the allowlist."""
+        for entry in entries:
+            self.add_entry(entry)
+
+    def contains(self, ip_str: str) -> bool:
+        """
+        Check if an IP address or CIDR is in the allowlist.
+
+        For individual IPs: checks exact match and CIDR containment.
+        For CIDR ranges from blocklists: checks if the range overlaps with
+        any allowlisted network.
+
+        Args:
+            ip_str: An IP address or CIDR string to check.
+
+        Returns:
+            True if the IP/CIDR should be allowlisted (skipped).
+        """
+        # Fast path: exact string match
+        if ip_str in self.exact_ips:
+            return True
+
+        try:
+            if "/" in ip_str:
+                # It's a CIDR from a blocklist - check overlap with allowlisted networks
+                network = ipaddress.ip_network(ip_str, strict=False)
+                if isinstance(network, ipaddress.IPv4Network):
+                    for allowed_net in self.networks_v4:
+                        if network.overlaps(allowed_net):
+                            return True
+                else:
+                    for allowed_net in self.networks_v6:
+                        if network.overlaps(allowed_net):
+                            return True
+            else:
+                # It's a single IP - check containment in allowlisted networks
+                ip = ipaddress.ip_address(ip_str)
+                if isinstance(ip, ipaddress.IPv4Address):
+                    for network in self.networks_v4:
+                        if ip in network:
+                            return True
+                else:
+                    for network in self.networks_v6:
+                        if ip in network:
+                            return True
+        except (ValueError, TypeError):
+            pass
+
+        return False
+
+    def fetch_github_ranges(self, session: Optional[requests.Session] = None) -> int:
+        """
+        Fetch GitHub's published IP ranges from their meta API and add to allowlist.
+
+        Falls back to hardcoded ranges if the API is unreachable.
+
+        Args:
+            session: Optional requests session to use. Creates a new one if not provided.
+
+        Returns:
+            Number of ranges added.
+        """
+        if session is None:
+            session = requests.Session()
+
+        ranges_added = 0
+        try:
+            self._logger.info("Fetching GitHub IP ranges from meta API...")
+            response = session.get(
+                GITHUB_META_URL,
+                timeout=10,
+                headers={"User-Agent": f"crowdsec-blocklist-import/{__version__}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            seen: set[str] = set()
+            for section in GITHUB_META_SECTIONS:
+                for cidr in data.get(section, []):
+                    if cidr not in seen:
+                        seen.add(cidr)
+                        self.add_entry(cidr)
+                        ranges_added += 1
+
+            self._logger.info(f"Added {ranges_added} GitHub IP ranges to allowlist")
+
+        except Exception as e:
+            self._logger.warning(f"Could not fetch GitHub meta API ({e}), using fallback ranges")
+            for cidr in GITHUB_FALLBACK_RANGES:
+                self.add_entry(cidr)
+                ranges_added += 1
+            self._logger.info(f"Added {ranges_added} fallback GitHub IP ranges to allowlist")
+
+        return ranges_added
+
+
+def build_allowlist(config: Config, session: Optional[requests.Session] = None,
+                    logger: Optional[logging.Logger] = None) -> Allowlist:
+    """
+    Build an Allowlist from the configuration.
+
+    Processes the ALLOWLIST env var entries and fetches provider ranges
+    (e.g., GitHub) if enabled.
+
+    Args:
+        config: The application configuration.
+        session: Optional requests session for fetching remote allowlists.
+        logger: Optional logger instance.
+
+    Returns:
+        A populated Allowlist instance.
+    """
+    allowlist = Allowlist(logger=logger)
+
+    # Add user-defined allowlist entries (supports both IPs and CIDRs)
+    if config.allow_list:
+        allowlist.add_entries(config.allow_list)
+        if allowlist.entry_count > 0:
+            if logger:
+                logger.info(f"Allowlist: {allowlist.entry_count} user-defined entries loaded")
+
+    # Fetch provider allowlists
+    if config.allowlist_github:
+        allowlist.fetch_github_ranges(session=session)
+
+    if allowlist.entry_count > 0 and logger:
+        logger.info(
+            f"Allowlist total: {len(allowlist.exact_ips)} IPs, "
+            f"{len(allowlist.networks_v4)} IPv4 networks, "
+            f"{len(allowlist.networks_v6)} IPv6 networks"
+        )
+
+    return allowlist
+
+
+def is_private_or_reserved(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Check if an IP is in a private or reserved range."""
+    for network in PRIVATE_NETWORKS:
+        try:
+            if ip in network:
+                return True
+        except TypeError:
+            # IPv4 in IPv6 network or vice versa
+            continue
+    return False
+
+
+def parse_ip_or_network(value: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Parse and validate an IP address or CIDR network.
+
+    Returns the normalized IP/CIDR string if valid, None otherwise.
+    Excludes private/reserved ranges and well-known IPs.
+    """
+    value = value.strip()
+    if not value:
+        return (None, None)
+
+    try:
+        if value.startswith("http"):
+            # Extract IP from URL
+            value = value.replace("https://", "") \
+                .replace("http://", "") \
+                .split("/")[0] \
+                .split(":")[0]
+
+        # Workaround typos in Maltrail: example C91.196.152.28
+        if value.startswith("C"):
+            value = value[1:]
+
+        if value in [
+            "TIMEOUT",
+            "NXDOMAIN",
+            "None",
+            ">>UNKNOWN<<",
+        ]:
+            return (None, None)
+
+        if "/" not in value:
+            # Parse as single IP
+            ip = ipaddress.ip_address(value)
+            if is_private_or_reserved(ip):
+                return (None, None)
+            if str(ip) in EXCLUDED_IPS:
+                return (None, None)
+            ret = str(ip)
+            # IPv4 addresses ending in .0 are treated as /24 networks by CrowdSec,
+            # so we must explicitly add the CIDR notation for them to be accepted.
+            # See: https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/48
+            if isinstance(ip, ipaddress.IPv4Address) and ret.endswith(".0"):
+                value = f"{ret}/24"
+            else:
+                return (ret, None)
+
+        if "/" in value:
+            # Try parsing as network (CIDR)
+            network = ipaddress.ip_network(value, strict=False)
+            # Check if network overlaps with private ranges
+            for private in PRIVATE_NETWORKS:
+                try:
+                    if network.overlaps(private):
+                        return (None, None)
+                except TypeError:
+                    continue
+            return (str(network), None)
+    except (ValueError, TypeError):
+        return (None, value)
+    return (None, None)
+
+
+def extract_ips_from_line(original_line: str, errors: dict[str, int], source: BlocklistSource) -> Generator[str, None, None]:
+    """
+    Extract IP addresses/networks from a line of text.
+
+    Handles various formats:
+    - Plain IP: 1.2.3.4
+    - CIDR: 1.2.3.0/24
+    - Tabular: 1.2.3.4<tab>other_data
+    - URLs: http://177.70.102.228:8070/TmpFTP/01/Consulta/2019-03-13/info.zip
+    - Commented: # comment
+    """
+    line = original_line.strip()
+
+    # Skip empty lines and comments
+    if not line or line.startswith(source.comment_char):
+        return
+
+    # Remove inline comments
+    if source.comment_char in line:
+        line = line.split(source.comment_char)[0].strip()
+
+    # Extract specific field if configured
+    if source.extract_field is not None:
+        parts = line.split(source.field_separator)
+        if len(parts) > source.extract_field:
+            line = parts[source.extract_field]
+
+    # Try to extract IP/CIDR patterns
+    # Handle various separators
+    for part in line.replace(",", " ").replace("\t", " ").split():
+        (parsed, error) = parse_ip_or_network(part)
+        if parsed:
+            yield parsed
+        if error:
+            if error not in errors.keys():
+                errors[error] = 1
+            else:
+                errors[error] += 1
+
+
+# =============================================================================
+# HTTP Client with Retry
+# =============================================================================
+
+def create_http_session(max_retries: int = 3) -> requests.Session:
+    """Create an HTTP session with retry logic."""
+    session = requests.Session()
+
+    retry_strategy = Retry(
+        total=max_retries,
+        respect_retry_after_header=False,
+        backoff_factor=1,  # 1s, 2s, 4s...
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST", "DELETE"],
+    )
+
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    return session
+
+
+def validate_lapi_tls_paths(
+    ca_cert_path: str = "",
+    cert_path: str = "",
+    key_path: str = "",
+    cert_env_name: str = "CROWDSEC_LAPI_AGENT_CERT_PATH",
+    key_env_name: str = "CROWDSEC_LAPI_AGENT_KEY_PATH",
+) -> list[str]:
+    """Validate LAPI TLS certificate paths before handing them to requests."""
+    errors: list[str] = []
+    tls_values = {
+        "CROWDSEC_LAPI_CA_CERT_PATH": ca_cert_path,
+        cert_env_name: cert_path,
+        key_env_name: key_path,
+    }
+
+    if not any(tls_values.values()):
+        return errors
+
+    if bool(cert_path) != bool(key_path):
+        errors.append(
+            f"{cert_env_name} and {key_env_name} must both "
+            "be set for LAPI TLS authentication"
+        )
+
+    for env_name, path in tls_values.items():
+        if not path:
+            continue
+        if not os.path.exists(path):
+            errors.append(f"{env_name} does not exist: {path}")
+            continue
+        if os.path.isdir(path):
+            errors.append(f"{env_name} must be a file, not a directory: {path}")
+            continue
+        if not os.access(path, os.R_OK):
+            errors.append(f"{env_name} is not readable: {path}")
+
+    return errors
+
+
+def warn_lapi_private_key_permissions(
+    logger: logging.Logger,
+    key_paths: dict[str, str],
+) -> None:
+    """Warn when private key files are readable by group or other users."""
+    for env_name, key_path in key_paths.items():
+        if not key_path or not os.path.exists(key_path):
+            continue
+        mode = os.stat(key_path).st_mode & 0o777
+        if mode & 0o077:
+            logger.warning(
+                f"{env_name} permissions are {oct(mode)[2:]}; "
+                "private key files should usually be 600 or 400"
+            )
+
+
+# =============================================================================
+# Blocklist Fetcher
+# =============================================================================
+
+@dataclass
+class FetchResult:
+    """Result of fetching a blocklist."""
+    source: BlocklistSource
+    success: bool
+    pulled_unique_ip_count: int = 0
+    new_unique_ip_count: int = 0
+    refreshed_unique_ip_count: int = 0
+    duration: float = 0.0
+    error_type: str = ""                    # "fetch" | "parse" | "import" | "encoding"
+    # original exception (sanitized before use as label)
+    error_exception: Optional[Exception] = None
+    parse_errors: dict[str, int] = field(default_factory=dict[str, int])
+    # Feed health (v3.9): HTTP status of the fetch (None when no HTTP request
+    # completed, e.g. preset values or a transport-level failure) and the raw
+    # entry count published by the feed.
+    http_status: Optional[int] = None
+    entry_count: int = 0
+
+
+def log_separator(logger: logging.Logger):
+    logger.debug("-" * 10)
+
+
+def fetch_blocklist(
+    session: requests.Session,
+    source: BlocklistSource,
+    config: Config,
+    seen_ips: set[tuple[str, timedelta]],
+    non_expiring_known_ips: list[str],
+    expiring_known_ips: list[str],
+    allowlist: Allowlist,
+    stats: ImportStats,
+    logger: logging.Logger,
+) -> tuple[list[str], list[str], FetchResult]:
+    """
+    Fetch and parse a single blocklist source.
+
+    Returns (new_unique_ips, FetchResult).
+    FetchResult now carries duration, error_type, error_exc and
+    per-token parse_errors so MetricsCollector can record full detail.
+    """
+    new_ips: list[str] = []
+    refresh_ips: list[str] = []
+    t0 = time.time()
+
+    try:
+        logger.debug(f"Fetching {source.name} from {source.url}")
+
+        headers = source.get_headers(config)
+        params = source.get_params(config)
+
+        if headers is None:
+            raise Exception(f"API key is required for {source.name}")
+
+        response = session.get(
+            source.url,
+            timeout=config.fetch_timeout,
+            stream=True,
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+
+        # Process line by line (streaming)
+        # Use iter_lines without decode_unicode to handle encoding ourselves
+        total_raw_ip_cnt = 0
+        total_imported_unique_ip_cnt = 0
+        ignored_white_listed_ip_cnt = 0
+        refreshed_ip_cnt = 0
+        parse_errors: dict[str, int] = {}
+        decision_duration = parse_duration(config.decision_duration)
+        new_ips: list[str] = []
+        non_expiring_seen_ips = set(non_expiring_known_ips.copy())
+        expiring_known_ips_set = set(expiring_known_ips)
+
+        logger.debug("Parsing...")
+        for raw_line in response.iter_lines():
+            if raw_line:
+                # Decode bytes to string, handling various encodings
+                if isinstance(raw_line, bytes):
+                    try:
+                        line = raw_line.decode("utf-8")
+                    except UnicodeDecodeError:
+                        try:
+                            line = raw_line.decode("latin-1")
+                        except UnicodeDecodeError:
+                            stats.encoding_errors += 1
+                            continue  # Skip unparseable lines
+                else:
+                    line = raw_line
+
+                for ip in extract_ips_from_line(line, parse_errors, source):
+                    total_raw_ip_cnt += 1
+                    if ip not in non_expiring_seen_ips:
+                        non_expiring_seen_ips.add(ip)
+                        seen_ips.add((ip, decision_duration))
+                        if ip in expiring_known_ips_set:
+                            refreshed_ip_cnt += 1
+                            total_imported_unique_ip_cnt += 1
+                            refresh_ips.append(ip)
+                        else:
+                            total_imported_unique_ip_cnt += 1
+                            new_ips.append(ip)
+
+        logger.debug("Applying allow-list to new IPs...")
+        allowed_new_ips = [ip for ip in new_ips if not allowlist.contains(ip)]
+
+        logger.debug("Applying allow-list to refreshed IPs...")
+        allowed_refresh_ips = [ip for ip in refresh_ips if not allowlist.contains(ip)]
+
+        ignored_white_listed_ip_cnt = len(refresh_ips) - len(allowed_refresh_ips) + len(new_ips) - len(allowed_new_ips)
+
+        refresh_ips = allowed_refresh_ips
+        new_ips = allowed_new_ips
+
+        new_ip_cnt = len(new_ips)
+
+        logger.debug("Finishing...")
+
+        # Log parse errors (capped)
+        max_cnt = 20
+        for error, cnt in parse_errors.items():
+            logger.debug(f'{source.name}: error parsing IP from "{error}" (×{cnt})')
+            max_cnt -= 1
+            if max_cnt == 0:
+                break
+
+        nb_errors = sum(parse_errors.values())
+        stats.parse_errors += nb_errors
+
+        error_cnt = f", {nb_errors} parse errors" if nb_errors > 0 else ""
+        ignored_ips = f"{ignored_white_listed_ip_cnt} ignored IPs (allow-list), " if ignored_white_listed_ip_cnt > 0 else ""
+        duration = time.time() - t0
+
+        logger.debug(
+            f"{source.name}: "
+            f"{total_raw_ip_cnt} total IPs, "
+            f"{total_imported_unique_ip_cnt} processed IPs"
+            f"{error_cnt}, "
+            f"{ignored_ips}"
+            f"{new_ip_cnt} unique new IPs, "
+            f"{refreshed_ip_cnt} refreshed IPs, "
+            f"duration: {duration} sec"
+        )
+
+        return new_ips, refresh_ips, FetchResult(
+            source=source,
+            success=True,
+            pulled_unique_ip_count=total_imported_unique_ip_cnt,
+            new_unique_ip_count=new_ip_cnt,
+            refreshed_unique_ip_count=refreshed_ip_cnt,
+            duration=duration,
+            parse_errors=parse_errors,
+            http_status=response.status_code,
+            entry_count=total_raw_ip_cnt,
+        )
+
+    except Exception as e:
+        if isinstance(e, requests.RequestException):
+            logger.warning(f"{source.name}: unavailable ({e})")
+        else:
+            logger.error(f"{source.name}: unexpected error ({e})")
+        duration = time.time() - t0
+        http_status = None
+        if isinstance(e, requests.HTTPError) and e.response is not None:
+            http_status = e.response.status_code
+        return new_ips, refresh_ips, FetchResult(
+            source=source,
+            success=False,
+            duration=duration,
+            error_type="fetch",
+            error_exception=e,
+            http_status=http_status,
+        )
+
+
+# =============================================================================
+# CrowdSec LAPI Client
+# =============================================================================
+
+class CrowdSecLAPI:
+    """CrowdSec Local API client.
+
+    Supports two authentication modes:
+    1. Bouncer API key (X-Api-Key header) - read-only access to decisions
+    2. Machine credentials (JWT token) - full access including writing alerts/decisions
+    3. TLS client certificate authentication - separate agent and bouncer cert roles
+
+    For writing decisions, machine credentials or an agent TLS cert are required.
+    For reading decisions, a bouncer API key or bouncer TLS cert is preferred.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        machine_id: str,
+        machine_password: str,
+        logger: logging.Logger,
+        ca_cert_path: str = "",
+        agent_cert_path: str = "",
+        agent_key_path: str = "",
+        bouncer_cert_path: str = "",
+        bouncer_key_path: str = "",
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.machine_id = machine_id
+        self.machine_password = machine_password
+        self.ca_cert_path = ca_cert_path
+        self.agent_cert_path = agent_cert_path
+        self.agent_key_path = agent_key_path
+        self.bouncer_cert_path = bouncer_cert_path
+        self.bouncer_key_path = bouncer_key_path
+        self.agent_tls_enabled = bool(agent_cert_path and agent_key_path)
+        self.bouncer_tls_enabled = bool(bouncer_cert_path and bouncer_key_path)
+        self.tls_enabled = self.agent_tls_enabled or self.bouncer_tls_enabled
+        self.session = create_http_session(10)
+        self.logger = logger
+        self.jwt_token: Optional[str] = None
+        self.jwt_expires: Optional[float] = None
+        self.startup_timestamp = int(time.time())
+
+        if ca_cert_path:
+            self.session.verify = ca_cert_path
+        if self.agent_tls_enabled:
+            self.session.cert = (agent_cert_path, agent_key_path)
+            self.logger.debug("Configured LAPI agent certificate authentication")
+
+        if self.agent_tls_enabled or self.bouncer_tls_enabled:
+            if not self.base_url.startswith("https://"):
+                self.logger.warning(
+                    "LAPI URL does not use HTTPS; client certificates are only "
+                    "sent over TLS. Set CROWDSEC_LAPI_URL to an https:// URL "
+                    "for mTLS authentication."
+                )
+
+            self.bouncer_session = create_http_session(10)
+            if ca_cert_path:
+                self.bouncer_session.verify = ca_cert_path
+        else:
+            self.bouncer_session = self.session
+
+        if self.bouncer_tls_enabled:
+            self.bouncer_session.cert = (bouncer_cert_path, bouncer_key_path)
+            self.logger.debug("Configured LAPI bouncer certificate authentication")
+
+        # Headers for bouncer API (read operations). Bouncer TLS auth omits
+        # X-Api-Key so CrowdSec can authenticate the bouncer certificate.
+        self.bouncer_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": get_lapi_user_agent(),
+        }
+        if not self.bouncer_tls_enabled and api_key:
+            self.bouncer_headers["X-Api-Key"] = api_key
+
+    def _get_machine_token(self) -> Optional[str]:
+        """Get JWT token for machine authentication."""
+        # Check if we have a valid cached token
+        if self.jwt_token and self.jwt_expires and time.time() < self.jwt_expires - 60:
+            return self.jwt_token
+
+        if (
+            not self.agent_tls_enabled
+            and (not self.machine_id or not self.machine_password)
+        ):
+            return None
+
+        try:
+            auth_payload: dict[str, object] = {
+                "scenarios": ["external/blocklist"],
+            }
+            if self.machine_id:
+                auth_payload["machine_id"] = self.machine_id
+            if self.machine_password:
+                auth_payload["password"] = self.machine_password
+
+            response = self.session.post(
+                f"{self.base_url}/v1/watchers/login",
+                json=auth_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": get_lapi_user_agent(),
+                },
+                timeout=10,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                self.jwt_token = data.get("token")
+                # Parse expiration or default to 1 hour
+                expire_str = data.get("expire", "")
+                if expire_str:
+                    try:
+                        expire_dt = datetime.fromisoformat(expire_str.replace("Z", "+00:00"))
+                        self.jwt_expires = expire_dt.timestamp()
+                    except (ValueError, AttributeError):
+                        self.jwt_expires = time.time() + 3600
+                else:
+                    self.jwt_expires = time.time() + 3600
+                self.logger.debug("Obtained machine JWT token")
+                return self.jwt_token
+
+            self.logger.warning(
+                f"Machine login failed: {response.status_code} {response.text[:200]}"
+            )
+            return None
+
+        except requests.RequestException as e:
+            self.logger.error(f"Machine login request failed: {e}")
+            return None
+
+    def _get_machine_headers(self) -> Optional[dict[str, str]]:
+        """Get headers for machine-authenticated requests."""
+        token = self._get_machine_token()
+        if not token:
+            return None
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": get_lapi_user_agent(),
+        }
+
+    def health_check(self) -> bool:
+        """Check if LAPI is accessible."""
+        try:
+            response = self.bouncer_session.get(
+                f"{self.base_url}/v1/decisions",
+                headers=self.bouncer_headers,
+                timeout=10,
+                params={"limit": 1},
+            )
+            # 200 = OK, 403 = unauthorized but reachable
+            return response.status_code in (200, 403)
+        except requests.RequestException as e:
+            self.logger.error(f"LAPI health check failed: {e}")
+            return False
+
+    def heartbeat(self) -> bool:
+        """Send a machine heartbeat to CrowdSec LAPI."""
+        headers = self._get_machine_headers()
+        if not headers:
+            self.logger.warning("Cannot send machine heartbeat without machine authentication")
+            return False
+
+        try:
+            response = self.session.get(
+                f"{self.base_url}/v1/heartbeat",
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                self.logger.debug("Machine heartbeat sent")
+                return True
+            self.logger.warning(
+                f"Machine heartbeat failed: {response.status_code} {response.text[:200]}"
+            )
+        except requests.RequestException as e:
+            self.logger.warning(f"Machine heartbeat request failed: {e}")
+        return False
+
+    def send_usage_metrics(self) -> bool:
+        """Send machine version and OS metadata to CrowdSec LAPI."""
+        headers = self._get_machine_headers()
+        if not headers:
+            self.logger.warning("Cannot send machine metadata without machine authentication")
+            return False
+
+        payload = {
+            "log_processors": [
+                {
+                    "version": __version__,
+                    "os": get_runtime_os_metadata(),
+                    "utc_startup_timestamp": self.startup_timestamp,
+                    "metrics": [],
+                    "feature_flags": [],
+                    "datasources": {},
+                    "hub_items": {},
+                }
+            ]
+        }
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/v1/usage-metrics",
+                json=payload,
+                headers=headers,
+                timeout=10,
+            )
+            if response.status_code in (200, 201, 204):
+                self.logger.debug("Machine usage metadata sent")
+                return True
+            self.logger.warning(
+                f"Machine usage metadata failed: {response.status_code} "
+                f"{response.text[:200]}"
+            )
+        except requests.RequestException as e:
+            self.logger.warning(f"Machine usage metadata request failed: {e}")
+        return False
+
+    def can_write(self) -> bool:
+        """Check if we have credentials for write operations."""
+        return self.agent_tls_enabled or bool(self.machine_id and self.machine_password)
+
+    def get_existing_ips(self) -> list[tuple[str, timedelta]]:
+        """
+        Get all existing decision IPs from CrowdSec.
+
+        Returns a list of IP addresses/CIDRs that already have decisions.
+        Uses machine JWT auth when available (returns full decision set).
+        Falls back to bouncer API key if machine credentials aren't configured.
+        """
+        existing: list[tuple[str, timedelta]] = []
+
+        try:
+            if self.bouncer_tls_enabled or self.api_key:
+                headers = self.bouncer_headers
+                session = self.bouncer_session
+            else:
+                # This usually returns 403 because /v1/decisions is a bouncer
+                # endpoint, but keep the attempt for compatibility with older
+                # CrowdSec deployments.
+                headers = self._get_machine_headers()
+                session = self.session
+                if not headers:
+                    return existing
+
+            response = session.get(
+                f"{self.base_url}/v1/decisions",
+                headers=headers,
+                timeout=120,
+                params={"limit": 500000},  # generous ceiling for large datasets
+            )
+
+            if response.status_code == 200:
+                decisions = response.json()
+                if decisions:
+                    for decision in decisions:
+                        value = decision.get("value", "")
+                        expiration_str = decision.get("duration", "0s")
+                        expiration = parse_duration(expiration_str)
+                        if value:
+                            existing.append((value, expiration))
+            elif response.status_code == 403 and headers is self.bouncer_headers:
+                self.logger.error(
+                    "Forbidden: check your LAPI bouncer API key or "
+                    "bouncer client certificate"
+                )
+                self.logger.error(f"Response: {response}")
+            elif response.status_code == 403:
+                # Machine JWT failed — fall back to bouncer auth
+                self.logger.warning(
+                    "Machine JWT rejected for decision query, "
+                    "falling back to bouncer API key"
+                )
+                return self._get_existing_ips_via_bouncer()
+            else:
+                self.logger.error(f"Error calling {self.base_url}/v1/decisions")
+                self.logger.error(f"Response: {response}")
+
+        except requests.RequestException as e:
+            self.logger.warning(f"Failed to fetch existing decisions: {e}")
+        except (ValueError, KeyError) as e:
+            self.logger.warning(f"Failed to parse existing decisions: {e}")
+
+        return existing
+
+    def _get_existing_ips_via_bouncer(self) -> list[tuple[str, timedelta]]:
+        """Fallback: fetch decisions using bouncer API key (stream mode — may be incomplete)."""
+        existing: list[tuple[str, timedelta]] = []
+        try:
+            response = self.bouncer_session.get(
+                f"{self.base_url}/v1/decisions",
+                headers=self.bouncer_headers,
+                timeout=60,
+                params={"limit": 500000},
+            )
+            if response.status_code == 200:
+                decisions = response.json()
+                if decisions:
+                    for decision in decisions:
+                        value = decision.get("value", "")
+                        expiration_str = decision.get("duration", "0s")
+                        expiration = parse_duration(expiration_str)
+                        if value:
+                            existing.append((value, expiration))
+        except requests.RequestException as e:
+            self.logger.warning(f"Failed to fetch existing decisions (bouncer): {e}")
+        except (ValueError, KeyError) as e:
+            self.logger.warning(f"Failed to parse existing decisions (bouncer): {e}")
+        return existing
+
+    def add_decisions(
+        self,
+        ips: list[str],
+        duration: str,
+        reason: str,
+        decision_type: str,
+        origin: str,
+        scenario: str,
+    ) -> tuple[int, int]:
+        """
+        Add decisions to CrowdSec via LAPI.
+
+        CrowdSec LAPI creates decisions through the /alerts endpoint.
+        Each alert can contain multiple decisions.
+
+        Returns (success_count, error_count).
+        """
+        if not ips:
+            return 0, 0
+
+        # Build decisions for this alert
+        decisions: list[dict[str, str]] = []
+        for ip in ips:
+            # Determine if it's a network or single IP
+            scope = "Ip"
+            if "/" in ip:
+                scope = "Range"
+
+            decisions.append({
+                "duration": duration,
+                "origin": origin,
+                "scenario": scenario,
+                "scope": scope,
+                "type": decision_type,
+                "value": ip,
+            })
+
+        # Build alert payload (CrowdSec creates decisions via alerts)
+        # See: https://crowdsecurity.github.io/api_doc/index.html?urls.primaryName=LAPI
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        alert: dict[str, object] = {
+            "capacity": 0,
+            "decisions": decisions,
+            "events": [],
+            "events_count": 1,
+            "labels": None,
+            "leakspeed": "0",
+            "message": reason,
+            "scenario": scenario,
+            "scenario_hash": "",
+            "scenario_version": "",
+            "simulated": False,
+            "source": {
+                "scope": "Ip",
+                "value": "0.0.0.0",
+            },
+            "start_at": now,
+            "stop_at": now,
+        }
+
+        # Get machine authentication headers (required for /alerts endpoint)
+        headers = self._get_machine_headers()
+        if not headers:
+            self.logger.error(
+                "Cannot write decisions: no machine JWT token available. "
+                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD or "
+                "CROWDSEC_LAPI_AGENT_CERT_PATH and CROWDSEC_LAPI_AGENT_KEY_PATH"
+            )
+            return 0, len(ips)
+
+        try:
+            response = self.session.post(
+                f"{self.base_url}/v1/alerts",
+                headers=headers,
+                json=[alert],  # API expects array of alerts
+                timeout=60,
+            )
+
+            if response.status_code in (200, 201):
+                return len(ips), 0
+
+            self.logger.warning(
+                f"LAPI returned {response.status_code}: {response.text[:200]}"
+            )
+            return 0, len(ips)
+
+        except requests.RequestException as e:
+            self.logger.error(f"Failed to add decisions: {e}")
+            return 0, len(ips)
+
+
+# =============================================================================
+# Main Importer
+# =============================================================================
+
+@dataclass
+class ImportStats:
+    """Statistics from the import run."""
+    sources_ok: int = 0
+    sources_failed: int = 0
+
+    total_ips: int = 0
+    encoding_errors: int = 0
+    parse_errors: int = 0
+
+    new_ips: int = 0
+    refreshed_ips: int = 0
+
+    imported_ok: int = 0
+    imported_failed: int = 0
+    existing_skipped: int = 0
+    duration_seconds: float = 0.0
+    # Set when the run was refused because zero feeds are enabled (v3.9
+    # guardrail): an empty import must never look like success.
+    fatal_no_feeds: bool = False
+
+
+def read_secret_file(file_path: str) -> str:
+    """Read a secret from a file, supporting multiple formats.
+
+    Supports:
+    - Docker secrets pattern: single line with just the password
+    - CrowdSec credentials: YAML with 'password: <value>' line
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        # Single line = plain password (Docker secrets style)
+        if len(lines) == 1:
+            return lines[0].strip()
+        # Multi-line = look for 'password: ' prefix (CrowdSec YAML style)
+        for line in lines:
+            if line.strip().startswith('password:'):
+                return line.replace('password:', '', 1).strip()
+        # Fallback: return entire content stripped
+        return ''.join(lines).strip()
+
+
+def create_lapi_client_from_config(
+    config: Config,
+    logger: logging.Logger,
+) -> Optional[CrowdSecLAPI]:
+    """Create a CrowdSec LAPI client from config and secret files."""
+    lapi_key = config.lapi_key
+    if config.lapi_key_file:
+        lapi_key = read_secret_file(config.lapi_key_file)
+        logger.debug(f"Read LAPI key from {config.lapi_key_file}")
+
+    machine_password = config.machine_password
+    if config.machine_password_file:
+        machine_password = read_secret_file(config.machine_password_file)
+        logger.debug(f"Read machine password from {config.machine_password_file}")
+
+    tls_errors = validate_lapi_tls_paths(
+        config.lapi_ca_cert_path,
+        config.lapi_agent_cert_path,
+        config.lapi_agent_key_path,
+        cert_env_name="CROWDSEC_LAPI_AGENT_CERT_PATH",
+        key_env_name="CROWDSEC_LAPI_AGENT_KEY_PATH",
+    )
+    tls_errors.extend(
+        validate_lapi_tls_paths(
+            "",
+            config.lapi_bouncer_cert_path,
+            config.lapi_bouncer_key_path,
+            cert_env_name="CROWDSEC_LAPI_BOUNCER_CERT_PATH",
+            key_env_name="CROWDSEC_LAPI_BOUNCER_KEY_PATH",
+        )
+    )
+    warn_lapi_private_key_permissions(
+        logger,
+        {
+            "CROWDSEC_LAPI_AGENT_KEY_PATH": config.lapi_agent_key_path,
+            "CROWDSEC_LAPI_BOUNCER_KEY_PATH": config.lapi_bouncer_key_path,
+        },
+    )
+    if tls_errors:
+        for error in tls_errors:
+            logger.error(error)
+        return None
+
+    return CrowdSecLAPI(
+        base_url=config.lapi_url,
+        api_key=lapi_key,
+        machine_id=config.machine_id,
+        machine_password=machine_password,
+        logger=logger,
+        ca_cert_path=config.lapi_ca_cert_path,
+        agent_cert_path=config.lapi_agent_cert_path,
+        agent_key_path=config.lapi_agent_key_path,
+        bouncer_cert_path=config.lapi_bouncer_cert_path,
+        bouncer_key_path=config.lapi_bouncer_key_path,
+    )
+
+
+OPT_IN_DEPRECATION_MESSAGE = (
+    "DEPRECATION: no feed-selection config found (neither PRESET nor "
+    "BLOCKLISTS_OPT_IN is set). Today's default still enables all feeds, but "
+    "v4.0.0 will flip the no-config fallback to PRESET=server (a conservative, "
+    "high-confidence set). Set PRESET=max to keep the current behaviour, "
+    "PRESET=embedded for UDM/UDR-class devices, or enable feeds explicitly "
+    "with ENABLE_* variables. See --list-sources."
+)
+
+
+def warn_opt_in_deprecation(config: Config, logger: logging.Logger) -> None:
+    """Log the loud pre-v4.0 deprecation warning when defaults are implicit."""
+    if not config.opt_in_deprecation:
+        return
+    logger.warning("!" * 78)
+    logger.warning(OPT_IN_DEPRECATION_MESSAGE)
+    logger.warning("!" * 78)
+
+
+def run_import(config: Config, logger: logging.Logger) -> ImportStats:
+    """
+    Run the blocklist import.
+
+    Memory efficient implementation using generators and batching.
+    """
+    stats = ImportStats()
+    start_time = time.time()
+
+    logger.info(f"CrowdSec Blocklist Import v{__version__}")
+    logger.info(f"Decision duration: {config.decision_duration}")
+    logger.info(f"LAPI URL: {config.lapi_url}")
+    logger.info(f"Machine ID: {config.machine_id}")
+    logger.info(f"Mode: {config.mode}")
+    if config.scenario_format == "structured":
+        logger.info(f"Scenario format: structured ({config.scenario_prefix}/<feed>/c<confidence>)")
+        if config.consolidate_alerts:
+            logger.info("CONSOLIDATE_ALERTS is on: one consolidated alert per feed, "
+                        "each keeping its per-feed confidence")
+
+    if config.dry_run:
+        logger.info("DRY RUN MODE - no changes will be made")
+    if config.max_decisions > 0:
+        logger.info(f"MAX_DECISIONS: {config.max_decisions} (will cap total decisions)")
+    if config.preset:
+        logger.info(f"Feed preset: {config.preset}")
+
+    # Loud, every-run deprecation warning ahead of the v4.0.0 defaults flip
+    warn_opt_in_deprecation(config, logger)
+
+    # Create HTTP session with retry logic
+    session = create_http_session(config.max_retries)
+
+    # Build CIDR-aware allowlist
+    allowlist = build_allowlist(config, session=session, logger=logger)
+    metrics = get_metrics()
+
+    lapi = create_lapi_client_from_config(config, logger)
+    if lapi is None:
+        return stats
+
+    if config.abuseipdb_api_key_file:
+        config.abuseipdb_api_key = read_secret_file(config.abuseipdb_api_key_file)
+        logger.debug(f"Read Abuse IP DB key from {config.abuseipdb_api_key_file}")
+
+    # Check LAPI connectivity (unless dry run)
+    if not config.dry_run:
+        # Need bouncer key, machine creds, or client certificate auth.
+        if (
+            not lapi.tls_enabled
+            and not lapi.api_key
+            and not (lapi.machine_id and lapi.machine_password)
+        ):
+            logger.error(
+                "Authentication required. Set either:\n"
+                "  - CROWDSEC_LAPI_KEY or CROWDSEC_LAPI_KEY_FILE (bouncer key for read-only)\n"
+                "  - CROWDSEC_MACHINE_ID + CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE (for full access)\n"
+                "  - CROWDSEC_LAPI_AGENT_CERT_PATH + CROWDSEC_LAPI_AGENT_KEY_PATH "
+                "(agent client certificate auth)\n"
+                "  - CROWDSEC_LAPI_BOUNCER_CERT_PATH + CROWDSEC_LAPI_BOUNCER_KEY_PATH "
+                "(bouncer client certificate auth)"
+            )
+            return stats
+
+        # Check if we have write capability
+        if not lapi.can_write():
+            logger.error(
+                "Machine credentials required for writing decisions.\n"
+                "Set CROWDSEC_MACHINE_ID and CROWDSEC_MACHINE_PASSWORD or CROWDSEC_MACHINE_PASSWORD_FILE,\n"
+                "or set CROWDSEC_LAPI_AGENT_CERT_PATH and CROWDSEC_LAPI_AGENT_KEY_PATH "
+                "for agent client certificate auth.\n"
+                "Get these from: cscli machines list (or register a new machine)"
+            )
+            return stats
+
+        if not lapi.health_check():
+            logger.error("Cannot connect to CrowdSec LAPI")
+            return stats
+
+        if config.heartbeat_interval > 0:
+            lapi.heartbeat()
+        lapi.send_usage_metrics()
+        logger.info("Connected to CrowdSec LAPI")
+
+    # Get existing decisions to avoid duplicates
+    existing_ips_with_expiration_info: set[tuple[str, timedelta]] = []
+    if not config.dry_run:
+        logger.info("Checking existing CrowdSec decisions...")
+        existing_ips_with_expiration_info = lapi.get_existing_ips()
+        stats.existing_skipped = len(existing_ips_with_expiration_info)
+        logger.info(f"Found {len(existing_ips_with_expiration_info)} existing decisions")
+
+    # Track seen IPs for deduplication (includes existing)
+    seen_ips: set[tuple[str, timedelta]] = set(existing_ips_with_expiration_info)
+
+    # Collect enabled sources
+    enabled_sources: list[BlocklistSource] = []
+    for source in BLOCKLIST_SOURCES:
+        if getattr(config, source.enabled_key, True):
+            if (source.rate_limited != (config.mode == "limited")) and (config.mode != "all"):
+                logger.debug(f"Mode is '{config.mode}': ignoring source {source.name}")
+            elif not source.get_can_import(config):
+                logger.debug(f"No API Key: ignoring source {source.name}")
+            else:
+                enabled_sources.append(source)
+    if config.custom_block_lists:
+        for i, url in enumerate(config.custom_block_lists):
+            if url:
+                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, enabled_key="custom_blocklists"))
+
+    # Guardrail (v3.9): an empty import must never look like success. A run
+    # with zero enabled feeds exits non-zero with a clear message instead of
+    # silently importing nothing (protection would quietly drop for
+    # auto-updaters after the v4.0.0 defaults flip).
+    if not enabled_sources:
+        logger.error(
+            "No blocklist feeds are enabled - refusing to run with an empty "
+            "feed set. Set PRESET=embedded|server|max, enable feeds with "
+            "ENABLE_*=true, or add CUSTOM_BLOCKLISTS. See --list-sources."
+        )
+        stats.fatal_no_feeds = True
+        stats.duration_seconds = time.time() - start_time
+        return stats
+
+    if config.scenario_format == "structured":
+        # Highest-confidence feeds first. Deduplication keeps the first feed
+        # that claims an IP, so processing order decides the scenario an IP
+        # listed by several feeds gets. Sorting makes that deterministic:
+        # the IP always gets the highest confidence among the feeds listing
+        # it. Stable sort keeps the definition order within equal confidence.
+        enabled_sources.sort(
+            key=lambda s: feed_confidence(s.name, config.feed_confidence),
+            reverse=True,
+        )
+
+    logger.info(f"Fetching from {len(enabled_sources)} enabled blocklist sources...")
+
+    # Compute max-decisions budget (None = unlimited; 0 = nothing to import)
+    max_new: Optional[int] = None
+    if config.max_decisions > 0:
+        max_new = max(0, config.max_decisions - len(existing_ips_with_expiration_info))
+        logger.info(
+            f"MAX_DECISIONS={config.max_decisions}, existing={len(existing_ips_with_expiration_info)}, "
+            f"budget for new IPs: {max_new}"
+        )
+        if max_new == 0:
+            logger.warning("Existing decisions already meet or exceed MAX_DECISIONS — nothing to import")
+    total_accepted: int = 0  # track new IPs accepted so far
+
+    # Process blocklists and batch import
+    batch: list[str] = []
+    # When consolidate_alerts is enabled, defer IPs for alert(s) at end of run.
+    # Legacy format: one mixed alert for all sources. Structured format: one
+    # alert per feed, so per-feed confidence survives consolidation.
+    deferred_ips: list[str] = []
+    deferred_by_source: dict[str, list[str]] = {}
+
+    if config.consolidate_alerts:
+        if config.scenario_format == "structured":
+            logger.info("Alert consolidation enabled — one consolidated alert per feed")
+        else:
+            logger.info("Alert consolidation enabled — all IPs will be sent in a single alert")
+
+    def log_batch_stats(ok: int, failed: int, batch_cnt: int):
+        if ok > 0:
+            logger.debug(f"Imported {ok} IPs in {batch_cnt} batches")
+        if failed > 0:
+            logger.warning(f"Failed to import {failed} IPs")
+
+    def flush_batch(source_name: str) -> tuple[int, int]:
+        """Import the current batch to CrowdSec (or defer if consolidating)."""
+        nonlocal batch
+        if not batch:
+            return 0, 0
+
+        if config.consolidate_alerts:
+            # Defer IPs for consolidated alert(s) at end of run
+            count = len(batch)
+            if config.scenario_format == "structured":
+                deferred_by_source.setdefault(source_name, []).extend(batch)
+            else:
+                deferred_ips.extend(batch)
+            batch = []
+            return count, 0
+
+        if config.dry_run:
+            logger.debug(f"DRY RUN: Would import {len(batch)} IPs")
+            stats.imported_ok += len(batch)
+            ok, failed = len(batch), 0
+        else:
+            ok, failed = lapi.add_decisions(
+                ips=batch,
+                duration=config.decision_duration,
+                reason=f"{config.decision_reason} ({source_name})",
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=build_scenario(config, source_name),
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
+
+            # Record import errors in metrics
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source=source_name,
+                    message="lapi_write_failure",
+                ).set(failed)
+
+        batch = []
+        return ok, failed
+
+    # Process each blocklist source
+    for source in enabled_sources:
+        refresh_period = timedelta(minutes=(config.refresh_period_limited_mn if source.rate_limited else config.refresh_period_frequent_mn))
+        expiring_known_ips_list = [ip for ip, expiration in seen_ips if expiration <= refresh_period]
+        non_expiring_known_ips = [ip for ip, expiration in seen_ips if expiration > refresh_period]
+
+        source_ok = 0
+        source_failed = 0
+        batch_cnt = 1
+        log_separator(logger)
+
+        # Handle preset_values (static IPs) vs URL fetch
+        if source.preset_values:
+            logger.debug(f"Adding {source.name} ({len(source.preset_values)} preset IPs)")
+            t0 = time.time()
+            # Deduplicate preset values against seen_ips (same as fetch_blocklist path):
+            # skip IPs that already hold a non-expiring decision, refresh only
+            # ones expiring soon. A preset IP already claimed by an earlier
+            # (higher-confidence, in structured mode) feed keeps that feed's
+            # scenario instead of being re-written under this one.
+            new_ips = []
+            refreshed_ips = []
+            non_expiring_preset_seen = set(non_expiring_known_ips)
+            expiring_preset_known = set(expiring_known_ips_list)
+            for ip in source.preset_values:
+                if ip in non_expiring_preset_seen:
+                    continue
+                non_expiring_preset_seen.add(ip)
+                seen_ips.add((ip, timedelta(days=1)))
+                if ip in expiring_preset_known:
+                    refreshed_ips.append(ip)
+                else:
+                    new_ips.append(ip)
+            result = FetchResult(
+                source=source,
+                success=True,
+                new_unique_ip_count=len(new_ips),
+                refreshed_unique_ip_count=len(refreshed_ips),
+                duration=time.time() - t0,
+                parse_errors={},
+                entry_count=len(source.preset_values),
+            )
+        else:
+            # Fetch blocklist and get results
+            new_ips, refreshed_ips, result = fetch_blocklist(
+                session=session,
+                source=source,
+                config=config,
+                seen_ips=seen_ips,
+                expiring_known_ips=expiring_known_ips_list,
+                non_expiring_known_ips=non_expiring_known_ips,
+                allowlist=allowlist,
+                stats=stats,
+                logger=logger,
+            )
+
+        # --- Update per-source metrics immediately after fetch ---
+        if result and metrics:
+            if result.success:
+                metrics.record_source_success(
+                    source_name=source.name,
+                    new_ip_count=result.new_unique_ip_count,
+                    refreshed_ip_count=result.refreshed_unique_ip_count,
+                    duration=result.duration,
+                    http_status=result.http_status,
+                    entry_count=result.entry_count,
+                )
+                if result.parse_errors:
+                    metrics.record_parse_errors(source.name, result.parse_errors)
+            else:
+                metrics.record_source_failure(
+                    source_name=source.name,
+                    error_type=result.error_type or "fetch",
+                    exc=result.error_exception,
+                    duration=result.duration,
+                    http_status=result.http_status,
+                )
+
+        if result and result.success:
+            stats.sources_ok += 1
+        else:
+            stats.sources_failed += 1
+
+        # Add IPs to batch (respecting MAX_DECISIONS budget)
+        stats.total_ips += len(new_ips) + len(refreshed_ips)
+
+        for ip in new_ips:
+            # Enforce MAX_DECISIONS cap
+            if max_new is not None and total_accepted >= max_new:
+                logger.info(
+                    "MAX_DECISIONS budget exhausted — skipping remaining IPs"
+                )
+                break
+
+            batch.append(ip)
+            stats.new_ips += 1
+            total_accepted += 1
+
+        for ip in refreshed_ips:
+            # Enforce MAX_DECISIONS cap
+            if max_new is not None and total_accepted >= max_new:
+                logger.info(
+                    "MAX_DECISIONS budget exhausted — skipping remaining IPs"
+                )
+                break
+
+            batch.append(ip)
+            stats.refreshed_ips += 1
+            total_accepted += 1
+
+            # Flush batch when full
+            if len(batch) >= config.batch_size:
+                batch_cnt += 1
+                ok, failed = flush_batch(source.name)
+                source_ok += ok
+                source_failed += failed
+
+        # Flush any remaining IPs
+        ok, failed = flush_batch(source.name)
+        source_ok += ok
+        source_failed += failed
+        log_batch_stats(source_ok, source_failed, batch_cnt)
+
+        # Stop processing more sources if budget exhausted
+        if max_new is not None and total_accepted >= max_new:
+            logger.info(f"MAX_DECISIONS budget reached ({total_accepted}/{max_new}) — skipping remaining sources")
+            break
+
+    # Flush consolidated alerts (structured format: one alert per feed, so
+    # each keeps its per-feed confidence)
+    if config.consolidate_alerts and config.scenario_format == "structured" and deferred_by_source:
+        total_deferred = sum(len(ips) for ips in deferred_by_source.values())
+        logger.info(
+            f"Sending {len(deferred_by_source)} consolidated alerts "
+            f"({total_deferred} IPs, one per feed)"
+        )
+        for source_name, source_ips in deferred_by_source.items():
+            if config.dry_run:
+                logger.debug(f"DRY RUN: Would import {len(source_ips)} IPs in consolidated alert for {source_name}")
+                stats.imported_ok += len(source_ips)
+                continue
+            ok, failed = lapi.add_decisions(
+                ips=source_ips,
+                duration=config.decision_duration,
+                reason=f"{config.decision_reason} ({source_name})",
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=build_scenario(config, source_name),
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
+
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source=source_name,
+                    message="lapi_write_failure",
+                ).set(failed)
+
+        logger.info(f"Consolidated alerts: {stats.imported_ok} IPs imported")
+
+    # Flush consolidated alert (single alert for all sources, legacy format)
+    if config.consolidate_alerts and config.scenario_format != "structured" and deferred_ips:
+        logger.info(f"Sending consolidated alert with {len(deferred_ips)} IPs from all sources")
+        if config.dry_run:
+            logger.debug(f"DRY RUN: Would import {len(deferred_ips)} IPs in single alert")
+            stats.imported_ok += len(deferred_ips)
+        else:
+            # Send all deferred IPs in a single alert
+            consolidated_reason = f"{config.decision_reason} (all sources)"
+            consolidated_scenario = build_scenario(config, None)
+            ok, failed = lapi.add_decisions(
+                ips=deferred_ips,
+                duration=config.decision_duration,
+                reason=consolidated_reason,
+                decision_type=config.decision_type,
+                origin=config.decision_origin,
+                scenario=consolidated_scenario,
+            )
+            stats.imported_ok += ok
+            stats.imported_failed += failed
+
+            if failed > 0 and metrics:
+                metrics.errors_total.labels(
+                    error_type="import",
+                    source="consolidated",
+                    message="lapi_write_failure",
+                ).set(failed)
+
+        logger.info(f"Consolidated alert: {stats.imported_ok} IPs imported")
+
+    stats.duration_seconds = time.time() - start_time
+
+    # Send telemetry
+    if config.telemetry_enabled and not config.dry_run:
+        send_telemetry(
+            session=session,
+            url=config.telemetry_url,
+            ip_count=stats.imported_ok,
+            logger=logger,
+        )
+
+    # Send webhook notification
+    if config.webhook_url:
+        send_webhook(config, stats, logger)
+
+    # Push aggregate metrics and push to gateway
+    if metrics:
+        metrics.update_aggregates(stats, len(enabled_sources))
+        metrics.push()
+
+    if config.fail_on_dead_feed and stats.sources_failed > 0:
+        logger.error(
+            f"FAIL_ON_DEAD_FEED is set and {stats.sources_failed} enabled "
+            "feed(s) failed - this run is treated as failed"
+        )
+
+    # Log summary
+    log_separator(logger)
+    logger.info(
+        f"Sources: {stats.sources_ok} successful, "
+        f"{stats.sources_failed} unavailable"
+    )
+
+    if stats.new_ips + stats.refreshed_ips == 0:
+        logger.info(
+            "No new IPs to import (all IPs already in CrowdSec)"
+        )
+    else:
+        logger.info(
+            f"Imported {stats.imported_ok} new IPs into CrowdSec"
+        )
+        if stats.imported_failed > 0:
+            logger.warning(f"Failed to import {stats.imported_failed} IPs")
+    if stats.parse_errors:
+        logger.warning(f"{stats.parse_errors} parsing errors")
+    if stats.encoding_errors:
+        logger.warning(f"{stats.encoding_errors} encoding errors")
+
+    logger.info(f"Completed in {stats.duration_seconds:.1f}s")
+
+    return stats
+
+
+def send_telemetry(
+    session: requests.Session,
+    url: str,
+    ip_count: int,
+    logger: logging.Logger,
+) -> None:
+    """Send anonymous telemetry."""
+    try:
+        session.post(
+            url,
+            json={
+                "tool": "blocklist-import-python",
+                "version": __version__,
+                "ip_count": ip_count,
+            },
+            timeout=5,
+        )
+        logger.debug("Telemetry sent")
+    except Exception:
+        pass  # Telemetry failure is not critical
+
+
+# =============================================================================
+# Webhook Notifications
+# =============================================================================
+
+def send_webhook(config: Config, stats: ImportStats, logger: logging.Logger) -> None:
+    """Send import results to a webhook (Discord, Slack, or generic)."""
+    if not config.webhook_url:
+        return
+
+    try:
+        deprecation = OPT_IN_DEPRECATION_MESSAGE if config.opt_in_deprecation else ""
+        if config.webhook_type == "discord":
+            payload = _format_discord_webhook(stats, deprecation)
+        elif config.webhook_type == "slack":
+            payload = _format_slack_webhook(stats, deprecation)
+        else:
+            payload = _format_generic_webhook(stats, deprecation)
+
+        response = requests.post(
+            config.webhook_url,
+            json=payload,
+            timeout=10,
+            headers={"Content-Type": "application/json"},
+        )
+        if response.status_code < 300:
+            logger.debug(f"Webhook sent ({config.webhook_type})")
+        else:
+            logger.warning(f"Webhook returned {response.status_code}: {response.text[:200]}")
+
+    except Exception as e:
+        logger.warning(f"Webhook failed: {e}")
+
+
+def _format_discord_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, list[dict[str, str | int | list[dict[str, str | bool]] | dict[str, str]]]]:
+    """Format stats as a Discord embed."""
+    color = 0x2ECC71 if stats.imported_failed == 0 else 0xE74C3C
+    fields: list[dict[str, str | bool]] = [
+        {"name": "Sources", "value": f"{stats.sources_ok} ok / {stats.sources_failed} failed", "inline": True},
+        {"name": "New IPs", "value": str(stats.new_ips), "inline": True},
+        {"name": "Imported", "value": str(stats.imported_ok), "inline": True},
+        {"name": "Duration", "value": f"{stats.duration_seconds:.1f}s", "inline": True},
+    ]
+    if stats.imported_failed > 0:
+        fields.append({"name": "Failed", "value": str(stats.imported_failed), "inline": True})
+    if deprecation:
+        fields.append({"name": "Deprecation warning", "value": deprecation[:1024], "inline": False})
+
+    return {
+        "embeds": [{
+            "title": "CrowdSec Blocklist Import",
+            "color": color,
+            "fields": fields,
+            "footer": {"text": f"v{__version__}"},
+        }]
+    }
+
+
+def _format_slack_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, str]:
+    """Format stats as a Slack message."""
+    emoji = ":white_check_mark:" if stats.imported_failed == 0 else ":warning:"
+    text = (
+        f"{emoji} *CrowdSec Blocklist Import*\n"
+        f"Sources: {stats.sources_ok} ok / {stats.sources_failed} failed\n"
+        f"New IPs: {stats.new_ips} | Imported: {stats.imported_ok}\n"
+        f"Duration: {stats.duration_seconds:.1f}s"
+    )
+    if stats.imported_failed > 0:
+        text += f"\nFailed: {stats.imported_failed}"
+    if deprecation:
+        text += f"\n:warning: {deprecation}"
+    return {"text": text}
+
+
+def _format_generic_webhook(stats: ImportStats, deprecation: str = "") -> dict[str, str | int | float]:
+    """Format stats as a generic JSON payload."""
+    payload: dict[str, str | int | float] = {
+        "event": "blocklist_import_complete",
+        "version": __version__,
+        "sources_ok": stats.sources_ok,
+        "sources_failed": stats.sources_failed,
+        "new_ips": stats.new_ips,
+        "imported_ok": stats.imported_ok,
+        "imported_failed": stats.imported_failed,
+        "duration_seconds": round(stats.duration_seconds, 1),
+    }
+    if deprecation:
+        payload["deprecation"] = deprecation
+    return payload
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def setup_logging(config: Config) -> logging.Logger:
+    """Configure logging with structured output."""
+    logger = logging.getLogger("blocklist-import")
+    logger.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logger.level)
+
+    _format = "[%(asctime)s] [%(levelname)s] %(message)s" if config.log_timestamps else "[%(levelname)s] %(message)s"
+    formatter = logging.Formatter(
+        _format,
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
+    logger.addHandler(handler)
+    return logger
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Import public threat blocklists into CrowdSec via LAPI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Environment Variables:
+  CROWDSEC_LAPI_URL        CrowdSec LAPI URL (default: http://localhost:8080)
+  CROWDSEC_LAPI_KEY[_FILE] CrowdSec LAPI key / key file (required)
+  CROWDSEC_LAPI_CA_CERT_PATH  Optional trust bundle for LAPI HTTPS verification
+  CROWDSEC_LAPI_AGENT_CERT_PATH   Agent client cert for JWT/write auth
+  CROWDSEC_LAPI_AGENT_KEY_PATH    Agent client key for JWT/write auth
+  CROWDSEC_LAPI_BOUNCER_CERT_PATH Bouncer client cert for decision reads
+  CROWDSEC_LAPI_BOUNCER_KEY_PATH  Bouncer client key for decision reads
+  DECISION_DURATION        How long decisions last (default: 24h)
+  SCENARIO_FORMAT          legacy ("external/blocklist (Feed)") or structured
+                           ("external/blocklist-import/<feed>/c<0-100>") (default: legacy)
+  SCENARIO_PREFIX          Prefix for structured scenarios (default: external/blocklist-import)
+  FEED_CONFIDENCE          Per-feed confidence overrides, e.g. "tor-exit-nodes=20,stopforumspam=40"
+  BATCH_SIZE               IPs per batch (default: 1000)
+  LOG_LEVEL                DEBUG, INFO, WARN, ERROR (default: INFO)
+  DRY_RUN                  Set to true for dry run mode
+  TELEMETRY_ENABLED        Set to false to disable telemetry
+  METRICS_ENABLED          Set to false to disable Prometheus metrics (default: true)
+  METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
+  INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0)
+  RUN_ON_START             In daemon mode, run immediately on start (default: true)
+  CROWDSEC_HEARTBEAT_INTERVAL  Machine heartbeat seconds (0=disabled, default: 60)
+  WEBHOOK_URL              Webhook URL for notifications (Discord/Slack/generic)
+  WEBHOOK_TYPE             Webhook format: generic, discord, slack (default: generic)
+  ABUSEIPDB_API_KEY        AbuseIPDB API key for direct blacklist queries
+  ABUSEIPDB_MIN_CONFIDENCE Minimum confidence score 1-100 (default: 90)
+
+  PRESET                   Feed preset: embedded, server, or max. Sets the default
+                           for every ENABLE_* switch; explicit ENABLE_* values win.
+  BLOCKLISTS_OPT_IN        Set to true to make unset feeds default to disabled
+  FAIL_ON_DEAD_FEED        Set to true to exit non-zero when any enabled feed fails
+
+  ENABLE_IPSUM             Enable IPsum blocklist (default: true)
+  ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
+  ENABLE_BLOCKLIST_DE      Enable Blocklist.de feeds (default: true)
+  ENABLE_FIREHOL           Enable all Firehol levels 1/2/3 (master switch, default: true)
+  ENABLE_FIREHOL_LEVEL1    Enable only Firehol level1 (overrides master when set)
+  ENABLE_FIREHOL_LEVEL2    Enable only Firehol level2 (overrides master when set)
+  ENABLE_FIREHOL_LEVEL3    Enable only Firehol level3 (overrides master when set)
+  ENABLE_ABUSE_CH          Enable Abuse.ch feeds (default: true)
+  ... and more (see README.md)
+
+Examples:
+  # Basic usage with LAPI key
+  CROWDSEC_LAPI_KEY=mykey ./blocklist_import.py
+
+  # Dry run to see what would be imported
+  ./blocklist_import.py --dry-run
+
+  # Validate configuration without running
+  ./blocklist_import.py --validate
+
+  # List all available blocklist sources
+  ./blocklist_import.py --list-sources
+
+  # Debug mode with custom duration
+  LOG_LEVEL=DEBUG DECISION_DURATION=48h ./blocklist_import.py
+
+Note: ENABLE_* variables are validated at startup. Invalid values will
+cause the program to exit with an error. Unknown ENABLE_* variables
+(possible typos) will generate warnings with suggestions.
+""",
+    )
+
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="Don't actually import, just show what would be done",
+    )
+
+    parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+
+    parser.add_argument(
+        "--lapi-url",
+        help="CrowdSec LAPI URL (overrides CROWDSEC_LAPI_URL)",
+    )
+
+    parser.add_argument(
+        "--lapi-key",
+        help="CrowdSec LAPI key (overrides CROWDSEC_LAPI_KEY)",
+    )
+
+    parser.add_argument(
+        "--duration",
+        help="Decision duration (overrides DECISION_DURATION)",
+    )
+
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Batch size for imports (overrides BATCH_SIZE)",
+    )
+
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate configuration and exit without running import",
+    )
+
+    parser.add_argument(
+        "--list-sources",
+        action="store_true",
+        help="List all available blocklist sources and exit",
+    )
+
+    parser.add_argument(
+        "--format",
+        choices=["text", "md"],
+        default="text",
+        help="Output format for --list-sources (default: text)",
+    )
+
+    parser.add_argument(
+        "--pushgateway-url",
+        help="Push URL for Prometheus (overrides METRICS_PUSHGATEWAY_URL, default: localhost:9091)",
+    )
+
+    parser.add_argument(
+        "--no-metrics",
+        action="store_true",
+        help="Disable Prometheus metrics endpoint",
+    )
+
+    parser.add_argument(
+        "--interval",
+        type=int,
+        metavar="SECONDS",
+        help="Run in daemon mode: repeat every N seconds (overrides INTERVAL)",
+    )
+
+    parser.add_argument(
+        "--heartbeat-interval",
+        type=int,
+        metavar="SECONDS",
+        help=(
+            "Machine heartbeat interval in seconds "
+            "(0=disabled, overrides CROWDSEC_HEARTBEAT_INTERVAL)"
+        ),
+    )
+
+    parser.add_argument(
+        "--webhook-url",
+        help="Webhook URL for notifications (overrides WEBHOOK_URL)",
+    )
+
+    parser.add_argument(
+        "--webhook-type",
+        choices=["generic", "discord", "slack"],
+        help="Webhook format (overrides WEBHOOK_TYPE)",
+    )
+
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Launch interactive setup wizard to configure .env file",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=["all", "frequent", "limited"],
+        default="all",
+    )
+
+    parser.add_argument(
+        "--impact-preview",
+        nargs="+",
+        metavar="LOGFILE",
+        help=(
+            "Report-only impact preview: fetch the current feeds and score "
+            "them against IP addresses observed in these log files, then "
+            "exit. Nothing is enabled or imported."
+        ),
+    )
+
+    parser.add_argument(
+        "--impact-preview-html",
+        metavar="PATH",
+        help="Also write a self-contained graphical HTML report to PATH",
+    )
+
+    parser.add_argument(
+        "--impact-preview-all-feeds",
+        action="store_true",
+        help="Preview every fetchable source, not just currently enabled feeds",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Main entry point."""
+    args = parse_args()
+
+    # Handle --setup flag before any config loading (wizard manages its own env)
+    if args.setup:
+        try:
+            from setup_wizard import run_setup
+        except ImportError as exc:
+            print(f"Error: setup_wizard module not found: {exc}", file=sys.stderr)
+            return 1
+        return run_setup()
+
+    # Load config from environment
+    try:
+        config = Config.from_env()
+    except EnvValidationError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
+
+    # Override with CLI args
+    if args.dry_run:
+        config.dry_run = True
+    if args.debug:
+        config.log_level = "DEBUG"
+    if args.lapi_url:
+        config.lapi_url = args.lapi_url
+    if args.lapi_key:
+        config.lapi_key = args.lapi_key
+    if args.duration:
+        config.decision_duration = args.duration
+    if args.batch_size:
+        config.batch_size = args.batch_size
+    if args.pushgateway_url:
+        config.pushgateway_url = args.pushgateway_url
+    if args.no_metrics:
+        config.metrics_enabled = False
+    if args.interval is not None:
+        config.interval = args.interval
+    if args.heartbeat_interval is not None:
+        config.heartbeat_interval = args.heartbeat_interval
+    if args.webhook_url:
+        config.webhook_url = args.webhook_url
+    if args.webhook_type:
+        config.webhook_type = args.webhook_type
+    if args.mode:
+        config.mode = args.mode
+
+    # Setup logging
+    logger = setup_logging(config)
+
+    # Handle --list-sources flag
+    if args.list_sources:
+        logger.info(f"CrowdSec Blocklist Import v{__version__}")
+        list_blocklist_sources(logger, fmt=args.format)
+        return 0
+
+    # Validate ENABLE_* environment variables
+    is_valid, errors = validate_enable_env_vars(logger)
+
+    if not is_valid:
+        logger.error("Configuration validation failed:")
+        logger.error("")
+        for error in errors:
+            for line in error.split("\n"):
+                logger.error(f"  {line}")
+        logger.error("")
+        logger.error("Fix the above errors and try again.")
+        logger.error("Use --list-sources to see all valid ENABLE_* variables.")
+        return 1
+
+    # Handle --validate flag
+    if args.validate:
+        logger.info(f"CrowdSec Blocklist Import v{__version__}")
+        logger.info("Configuration validation passed!")
+        logger.info("")
+        list_blocklist_sources(logger, fmt=args.format)
+        return 0
+
+    # Handle report-only impact preview (never touches LAPI)
+    if args.impact_preview:
+        return run_impact_preview(
+            config,
+            logger,
+            args.impact_preview,
+            args.impact_preview_html,
+            args.impact_preview_all_feeds,
+        )
+
+    # Initialize Prometheus metrics
+    if config.metrics_enabled and PROMETHEUS_AVAILABLE:
+        init_metrics(config.pushgateway_url, logger)
+
+    elif config.metrics_enabled and not PROMETHEUS_AVAILABLE:
+        logger.warning(
+            "Prometheus metrics requested but prometheus-client not installed. "
+            "Install with: pip install prometheus-client"
+        )
+
+    # Daemon mode: repeat on interval
+    if config.interval > 0:
+        return _run_daemon(config, logger)
+
+    # Single run mode
+    return _run_once(config, logger)
+
+
+def collect_preview_feeds(
+    config: Config,
+    logger: logging.Logger,
+    all_feeds: bool = False,
+) -> list[tuple[str, str, set[str], str]]:
+    """Fetch current feed contents for the impact preview. Report-only.
+
+    Returns (name, enabled_key, entries, error) tuples. A feed that fails
+    to fetch comes back with empty entries and an error note instead of
+    aborting the whole preview; the report flags it.
+    """
+    feeds: list[tuple[str, str, set[str], str]] = []
+    session = create_http_session(config.max_retries)
+    for source in BLOCKLIST_SOURCES:
+        key = source.enabled_key or ""
+        if not all_feeds and not getattr(config, key, False):
+            continue
+        if not source.url and source.preset_values is None:
+            continue
+        if not source.get_can_import(config):
+            feeds.append((source.name, key, set(),
+                          "skipped: not importable in this config "
+                          "(for example, missing API key)"))
+            continue
+        try:
+            entries: set[str] = set()
+            if source.preset_values is not None:
+                for value in source.preset_values:
+                    parsed, _err = parse_ip_or_network(value)
+                    if parsed:
+                        entries.add(parsed)
+            else:
+                headers = source.get_headers(config)
+                params = source.get_params(config)
+                if headers is None:
+                    raise Exception(f"API key is required for {source.name}")
+                response = session.get(
+                    source.url,
+                    timeout=config.fetch_timeout,
+                    stream=True,
+                    headers=headers,
+                    params=params,
+                )
+                response.raise_for_status()
+                errors: dict[str, int] = {}
+                for raw_line in response.iter_lines():
+                    if not raw_line:
+                        continue
+                    if isinstance(raw_line, bytes):
+                        try:
+                            line = raw_line.decode("utf-8")
+                        except UnicodeDecodeError:
+                            line = raw_line.decode("latin-1")
+                    else:
+                        line = raw_line
+                    entries.update(extract_ips_from_line(line, errors, source))
+            feeds.append((source.name, key, entries, ""))
+            logger.debug(f"Impact preview: {source.name}: {len(entries)} entries")
+        except Exception as exc:  # a dead feed must not kill the preview
+            feeds.append((source.name, key, set(), sanitize_error_message(exc)))
+            logger.warning(f"Impact preview: {source.name} failed: "
+                           f"{sanitize_error_message(exc)}")
+    return feeds
+
+
+def run_impact_preview(
+    config: Config,
+    logger: logging.Logger,
+    log_paths: list[str],
+    html_path: Optional[str],
+    all_feeds: bool,
+) -> int:
+    """Run the report-only impact preview and exit. Never touches LAPI."""
+    try:
+        from impact_preview import (
+            compute_impact,
+            extract_log_ips,
+            render_html,
+            render_text,
+        )
+    except ImportError as exc:
+        logger.error(f"impact_preview module not found: {exc}")
+        return 1
+
+    log_ips: set[str] = set()
+    for path in log_paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                log_ips |= extract_log_ips(handle.read())
+        except OSError as exc:
+            logger.error(f"Cannot read log file {path}: {exc}")
+            return 1
+    if not log_ips:
+        logger.error("No IP addresses found in the provided log input.")
+        return 1
+
+    feeds = collect_preview_feeds(config, logger, all_feeds)
+    if not feeds:
+        logger.error("No fetchable feeds to preview.")
+        return 1
+
+    membership: dict[str, tuple[str, ...]] = {}
+    for _name, key, _entries, _err in feeds:
+        if key and key not in membership:
+            membership[key] = tuple(presets_for_key(key))
+
+    report = compute_impact(
+        feeds,
+        log_ips,
+        preset_membership=membership,
+        log_label=", ".join(log_paths),
+        feed_scope=("all fetchable feeds" if all_feeds
+                    else "currently enabled feeds"),
+    )
+    print(render_text(report))
+
+    if html_path:
+        try:
+            with open(html_path, "w", encoding="utf-8") as handle:
+                handle.write(render_html(report))
+            logger.info(f"Graphical HTML report written to {html_path}")
+        except OSError as exc:
+            logger.error(f"Cannot write HTML report to {html_path}: {exc}")
+            return 1
+
+    if all(f.error for f in report.feeds):
+        return 1
+    return 0
+
+
+def _run_once(config: Config, logger: logging.Logger) -> int:
+    """Execute a single import run."""
+    try:
+        stats = run_import(config, logger)
+
+        # Zero enabled feeds is a hard failure (guardrail: an empty import
+        # must never look like success)
+        if stats.fatal_no_feeds:
+            return 1
+        # Exit with error if import failed
+        if stats.sources_ok == 0:
+            return 1
+        if stats.imported_failed > 0 and stats.imported_ok == 0:
+            return 1
+        # FAIL_ON_DEAD_FEED: any failed enabled feed fails the run
+        if config.fail_on_dead_feed and stats.sources_failed > 0:
+            return 1
+        return 0
+
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        return 130
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        if config.log_level == "DEBUG":
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+def _run_heartbeat_loop(
+    config: Config,
+    logger: logging.Logger,
+    stop_event: threading.Event,
+) -> None:
+    """Send CrowdSec LAPI heartbeats until stopped."""
+    if config.dry_run or config.heartbeat_interval <= 0:
+        return
+
+    lapi = create_lapi_client_from_config(config, logger)
+    if lapi is None or not lapi.can_write():
+        logger.warning("Machine heartbeat loop disabled: no machine authentication")
+        return
+
+    while not stop_event.is_set():
+        lapi.heartbeat()
+        stop_event.wait(config.heartbeat_interval)
+
+
+def _start_heartbeat_loop(
+    config: Config,
+    logger: logging.Logger,
+) -> tuple[Optional[threading.Thread], threading.Event]:
+    """Start the daemon heartbeat loop when enabled."""
+    stop_event = threading.Event()
+    if config.dry_run or config.heartbeat_interval <= 0:
+        return None, stop_event
+
+    thread = threading.Thread(
+        target=_run_heartbeat_loop,
+        args=(config, logger, stop_event),
+        name="crowdsec-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    logger.info(f"Machine heartbeat interval: {config.heartbeat_interval}s")
+    return thread, stop_event
+
+
+def _run_daemon(config: Config, logger: logging.Logger) -> int:
+    """Run in daemon mode: repeat imports on a fixed interval."""
+    shutdown = False
+    heartbeat_thread, heartbeat_stop = _start_heartbeat_loop(config, logger)
+
+    def _signal_handler(signum: object, _: object):
+        nonlocal shutdown
+        logger.info(f"Received signal {signum}, shutting down after current run...")
+        shutdown = True
+        heartbeat_stop.set()
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    logger.info(f"Daemon mode: running every {config.interval}s (Ctrl+C to stop)")
+
+    run_number = 0
+    while not shutdown:
+        run_number += 1
+
+        if run_number == 1 and not config.run_on_start:
+            logger.info(f"Skipping initial run (RUN_ON_START=false), waiting {config.interval}s...")
+        else:
+            logger.info(f"Starting import run #{run_number}")
+            try:
+                stats = run_import(config, logger)
+                if stats.fatal_no_feeds:
+                    logger.error(
+                        "No feeds enabled - the daemon keeps running but nothing "
+                        "is imported until the configuration is fixed"
+                    )
+                elif stats.sources_ok == 0:
+                    logger.warning("No sources succeeded — will retry next interval")
+            except Exception as e:
+                logger.error(f"Import run #{run_number} failed: {e}")
+                if config.log_level == "DEBUG":
+                    import traceback
+                    traceback.print_exc()
+
+        # Sleep in small increments so we can respond to signals quickly
+        logger.info(f"Next run in {config.interval}s...")
+        elapsed = 0
+        while elapsed < config.interval and not shutdown:
+            time.sleep(min(5, config.interval - elapsed))
+            elapsed += 5
+
+    logger.info("Daemon stopped")
+    heartbeat_stop.set()
+    if heartbeat_thread is not None:
+        heartbeat_thread.join(timeout=5)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
