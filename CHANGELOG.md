@@ -9,13 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Added
 
-- **Impact preview (`--impact-preview`)** - Report-only preview that scores blocklist feeds against IP addresses observed in your own log files before you enable anything: per-feed hits, unique vs shared (overlapping) coverage, a preset ladder (`embedded`/`server`/`max`) with marginal hits, and an optional self-contained graphical HTML report (`--impact-preview-html`, inline SVG, no JavaScript). `--impact-preview-all-feeds` scores every fetchable source instead of only the enabled ones. Strictly report-only: never contacts LAPI, never adds decisions, never changes feed configuration, and needs no `CROWDSEC_LAPI_KEY`. Log contents stay local; only aggregate counts are reported. Allowlists are not applied. See [docs/impact-preview.md](docs/impact-preview.md).
-
 - **Custom feeds file (`FEEDS_FILE`)** - Declare extra blocklist feeds in a TOML or JSON file (names, URLs, comment characters, field extraction, rate limiting, and license metadata) without editing code. Feeds from the file import like built-in sources (same dedup, allowlist, and MAX_DECISIONS handling), appear in `--list-sources` under their own heading, and accept `FEED_CONFIDENCE` overrides. TOML uses the Python 3.11+ standard library, or the optional `tomli` extra on older Pythons; JSON works everywhere. Invalid files fail at startup with a precise error, before any LAPI connection. The file is declarative only - it cannot run code.
-
-### Fixed
-
-- **Packaging ships all runtime modules** - `pyproject.toml` `py-modules` now includes `impact_preview` and `setup_wizard`, and the Docker image copies every application module, so `pip`-installed and container runs of `--impact-preview` and `--setup` no longer fail with "module not found". `setup_wizard` was already missing from pip installs before this branch.
 
 ---
 ## [3.9.0] — 2026-10-13
