@@ -409,6 +409,9 @@ Options:
   --webhook-url URL         Webhook URL for notifications
   --webhook-type TYPE       Webhook format: generic, discord, slack
   --mode MODE               Filter blocklist sources regarding rate-limiting: all, frequent, limited
+  --impact-preview LOG...   Report-only: score feeds against IPs in your log files
+  --impact-preview-html P   Also write a self-contained graphical HTML report to P
+  --impact-preview-all-feeds  Preview every fetchable source, not just enabled ones
 ```
 
 ### Examples
@@ -431,6 +434,11 @@ python blocklist_import.py --duration 48h --batch-size 500
 
 # Validate configuration without running
 python blocklist_import.py --validate
+
+# Impact preview: what would the feeds have caught in your own logs?
+# (report only - nothing is enabled or imported)
+python blocklist_import.py --impact-preview /var/log/nginx/access.log \
+    --impact-preview-html preview.html
 ```
 
 ---
@@ -450,6 +458,30 @@ CROWDSEC_HEARTBEAT_INTERVAL=60  # Keep cscli machines list heartbeat fresh
 The daemon sends a machine heartbeat every 60 seconds by default, matching CrowdSec's own client behavior. Set `CROWDSEC_HEARTBEAT_INTERVAL=0` to disable it.
 
 The daemon handles SIGTERM/SIGINT gracefully -- it finishes the current run, then exits. This makes it Docker-friendly with `restart: unless-stopped`.
+
+### Impact Preview (Report Only)
+
+Before enabling a feed or a preset, see what it would have done against
+your own traffic:
+
+```bash
+python blocklist_import.py --impact-preview /var/log/nginx/access.log \
+    --impact-preview-html preview.html
+```
+
+The preview extracts IP addresses from any plain-text log (web server,
+firewall, `cscli alerts list -o json` piped through `jq`, a saved IP list),
+fetches the current feed contents, and reports per feed and per preset how
+many observed addresses each would have covered, how much of that coverage
+is unique, and how much overlaps other feeds. The HTML report renders the
+same numbers as charts. See [docs/impact-preview.md](docs/impact-preview.md).
+
+This is strictly report-only: it never contacts LAPI, never adds decisions,
+never changes feed configuration, and needs no `CROWDSEC_LAPI_KEY`. Log
+contents stay on your machine; only aggregate counts appear in the output.
+Allowlists are not applied, so import-time counts can only be lower. The
+HTML report contains a sample of matched addresses from your logs; treat it
+as sensitive and do not publish reports built from real logs.
 
 ### Webhook Notifications
 

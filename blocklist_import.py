@@ -3510,6 +3510,29 @@ cause the program to exit with an error. Unknown ENABLE_* variables
         default="all",
     )
 
+    parser.add_argument(
+        "--impact-preview",
+        nargs="+",
+        metavar="LOGFILE",
+        help=(
+            "Report-only impact preview: fetch the current feeds and score "
+            "them against IP addresses observed in these log files, then "
+            "exit. Nothing is enabled or imported."
+        ),
+    )
+
+    parser.add_argument(
+        "--impact-preview-html",
+        metavar="PATH",
+        help="Also write a self-contained graphical HTML report to PATH",
+    )
+
+    parser.add_argument(
+        "--impact-preview-all-feeds",
+        action="store_true",
+        help="Preview every fetchable source, not just currently enabled feeds",
+    )
+
     return parser.parse_args()
 
 
@@ -3592,6 +3615,16 @@ def main() -> int:
         list_blocklist_sources(logger, fmt=args.format)
         return 0
 
+    # Handle report-only impact preview (never touches LAPI)
+    if args.impact_preview:
+        return run_impact_preview(
+            config,
+            logger,
+            args.impact_preview,
+            args.impact_preview_html,
+            args.impact_preview_all_feeds,
+        )
+
     # Initialize Prometheus metrics
     if config.metrics_enabled and PROMETHEUS_AVAILABLE:
         init_metrics(config.pushgateway_url, logger)
@@ -3608,6 +3641,136 @@ def main() -> int:
 
     # Single run mode
     return _run_once(config, logger)
+
+
+def collect_preview_feeds(
+    config: Config,
+    logger: logging.Logger,
+    all_feeds: bool = False,
+) -> list[tuple[str, str, set[str], str]]:
+    """Fetch current feed contents for the impact preview. Report-only.
+
+    Returns (name, enabled_key, entries, error) tuples. A feed that fails
+    to fetch comes back with empty entries and an error note instead of
+    aborting the whole preview; the report flags it.
+    """
+    feeds: list[tuple[str, str, set[str], str]] = []
+    session = create_http_session(config.max_retries)
+    for source in BLOCKLIST_SOURCES:
+        key = source.enabled_key or ""
+        if not all_feeds and not getattr(config, key, False):
+            continue
+        if not source.url and source.preset_values is None:
+            continue
+        if not source.get_can_import(config):
+            feeds.append((source.name, key, set(),
+                          "skipped: not importable in this config "
+                          "(for example, missing API key)"))
+            continue
+        try:
+            entries: set[str] = set()
+            if source.preset_values is not None:
+                for value in source.preset_values:
+                    parsed, _err = parse_ip_or_network(value)
+                    if parsed:
+                        entries.add(parsed)
+            else:
+                headers = source.get_headers(config)
+                params = source.get_params(config)
+                if headers is None:
+                    raise Exception(f"API key is required for {source.name}")
+                response = session.get(
+                    source.url,
+                    timeout=config.fetch_timeout,
+                    stream=True,
+                    headers=headers,
+                    params=params,
+                )
+                response.raise_for_status()
+                errors: dict[str, int] = {}
+                for raw_line in response.iter_lines():
+                    if not raw_line:
+                        continue
+                    if isinstance(raw_line, bytes):
+                        try:
+                            line = raw_line.decode("utf-8")
+                        except UnicodeDecodeError:
+                            line = raw_line.decode("latin-1")
+                    else:
+                        line = raw_line
+                    entries.update(extract_ips_from_line(line, errors, source))
+            feeds.append((source.name, key, entries, ""))
+            logger.debug(f"Impact preview: {source.name}: {len(entries)} entries")
+        except Exception as exc:  # a dead feed must not kill the preview
+            feeds.append((source.name, key, set(), sanitize_error_message(exc)))
+            logger.warning(f"Impact preview: {source.name} failed: "
+                           f"{sanitize_error_message(exc)}")
+    return feeds
+
+
+def run_impact_preview(
+    config: Config,
+    logger: logging.Logger,
+    log_paths: list[str],
+    html_path: Optional[str],
+    all_feeds: bool,
+) -> int:
+    """Run the report-only impact preview and exit. Never touches LAPI."""
+    try:
+        from impact_preview import (
+            compute_impact,
+            extract_log_ips,
+            render_html,
+            render_text,
+        )
+    except ImportError as exc:
+        logger.error(f"impact_preview module not found: {exc}")
+        return 1
+
+    log_ips: set[str] = set()
+    for path in log_paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                log_ips |= extract_log_ips(handle.read())
+        except OSError as exc:
+            logger.error(f"Cannot read log file {path}: {exc}")
+            return 1
+    if not log_ips:
+        logger.error("No IP addresses found in the provided log input.")
+        return 1
+
+    feeds = collect_preview_feeds(config, logger, all_feeds)
+    if not feeds:
+        logger.error("No fetchable feeds to preview.")
+        return 1
+
+    membership: dict[str, tuple[str, ...]] = {}
+    for _name, key, _entries, _err in feeds:
+        if key and key not in membership:
+            membership[key] = tuple(presets_for_key(key))
+
+    report = compute_impact(
+        feeds,
+        log_ips,
+        preset_membership=membership,
+        log_label=", ".join(log_paths),
+        feed_scope=("all fetchable feeds" if all_feeds
+                    else "currently enabled feeds"),
+    )
+    print(render_text(report))
+
+    if html_path:
+        try:
+            with open(html_path, "w", encoding="utf-8") as handle:
+                handle.write(render_html(report))
+            logger.info(f"Graphical HTML report written to {html_path}")
+        except OSError as exc:
+            logger.error(f"Cannot write HTML report to {html_path}: {exc}")
+            return 1
+
+    if all(f.error for f in report.feeds):
+        return 1
+    return 0
 
 
 def _run_once(config: Config, logger: logging.Logger) -> int:

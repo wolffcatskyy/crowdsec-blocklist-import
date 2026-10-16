@@ -39,7 +39,7 @@ RUN adduser -D -H -s /sbin/nologin blocklist
 WORKDIR /app
 
 # Copy application
-COPY --chown=blocklist:blocklist blocklist_import.py .
+COPY --chown=blocklist:blocklist blocklist_import.py autopilot_report.py autopilot_metrics.py impact_preview.py setup_wizard.py ./
 
 # Make script readable/executable
 RUN chmod 755 blocklist_import.py
