@@ -1,5 +1,0 @@
-autopilot_metrics
-autopilot_report
-blocklist_import
-impact_preview
-setup_wizard

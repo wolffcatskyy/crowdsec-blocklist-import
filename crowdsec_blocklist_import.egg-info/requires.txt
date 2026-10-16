@@ -1,8 +1,0 @@
-requests<3.0.0,>=2.28.0
-python-dotenv<2.0.0,>=1.0.0
-
-[all]
-crowdsec-blocklist-import[metrics]
-
-[metrics]
-prometheus-client<1.0.0,>=0.17.0
