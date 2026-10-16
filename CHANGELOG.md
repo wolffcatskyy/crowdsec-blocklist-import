@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ---
 ## [Unreleased]
 
+### Added
+
+- **Impact preview (`--impact-preview`)** - Report-only preview that scores blocklist feeds against IP addresses observed in your own log files before you enable anything: per-feed hits, unique vs shared (overlapping) coverage, a preset ladder (`embedded`/`server`/`max`) with marginal hits, and an optional self-contained graphical HTML report (`--impact-preview-html`, inline SVG, no JavaScript). `--impact-preview-all-feeds` scores every fetchable source instead of only the enabled ones. Strictly report-only: never contacts LAPI, never adds decisions, never changes feed configuration, and needs no `CROWDSEC_LAPI_KEY`. Log contents stay local; only aggregate counts are reported. Allowlists are not applied. See [docs/impact-preview.md](docs/impact-preview.md).
+
 ---
 ## [3.9.0] — 2026-10-13
 
