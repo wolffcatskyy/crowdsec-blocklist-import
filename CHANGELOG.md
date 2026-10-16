@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 ---
 ## [Unreleased]
 
+### Added
+
+- **Custom feeds file (`FEEDS_FILE`)** - Declare extra blocklist feeds in a TOML or JSON file (names, URLs, comment characters, field extraction, rate limiting, and license metadata) without editing code. Feeds from the file import like built-in sources (same dedup, allowlist, and MAX_DECISIONS handling), appear in `--list-sources` under their own heading, and accept `FEED_CONFIDENCE` overrides. TOML uses the Python 3.11+ standard library, or the optional `tomli` extra on older Pythons; JSON works everywhere. Invalid files fail at startup with a precise error, before any LAPI connection. The file is declarative only - it cannot run code.
+
 ---
 ## [3.9.0] — 2026-10-13
 

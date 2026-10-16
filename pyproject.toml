@@ -38,8 +38,12 @@ dependencies = [
 metrics = [
     "prometheus-client>=0.17.0,<1.0.0",
 ]
+# TOML feeds files (FEEDS_FILE) on Python < 3.11; 3.11+ has tomllib built in.
+toml = [
+    "tomli>=2.0.0; python_version<'3.11'",
+]
 all = [
-    "crowdsec-blocklist-import[metrics]",
+    "crowdsec-blocklist-import[metrics,toml]",
 ]
 
 [project.urls]

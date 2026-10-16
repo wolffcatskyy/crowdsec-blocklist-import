@@ -1,0 +1,4 @@
+[[feeds]]
+name = "Smoke TOML feed"
+url = "https://example.com/smoke-toml.txt"
+rate_limited = true

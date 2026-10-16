@@ -127,6 +127,7 @@ These items are under consideration but not yet scheduled:
 - Leader election for clustered deployments
 
 ### Configuration File Support
+- [x] Custom feeds file (`FEEDS_FILE`, TOML/JSON) - declarative extra feeds without code changes
 - YAML/TOML config file as alternative to environment variables
 - Per-source configuration with timeouts and retry settings
 

@@ -158,34 +158,20 @@ python3 blocklist_import.py
 
 ### Can I add custom blocklist sources?
 
-**Not yet natively**, but workarounds exist.
+**Yes**, without editing code:
 
-**Current limitation:**
-- Sources are hardcoded in the application
-- Per-feed control via `ENABLE_*` environment variables (added in v3.0)
+1. **Plain URL lists:** set `CUSTOM_BLOCKLISTS` to comma-separated URLs; each imports like a built-in source.
+2. **Named feeds with options:** point `FEEDS_FILE` at a TOML or JSON file declaring feeds (names, comment characters, field extraction, rate limiting, license metadata). See the [Configuration Reference](config-reference.md#custom-feeds-file).
 
-**Workarounds:**
-
-1. **Modify source list in code:**
-   Edit `blocklist_import.py` and add your source to the `SOURCES` list, then run directly.
-
-2. **Pre-process custom blocklist:**
-   Download your blocklist separately, then feed it to CrowdSec:
-   ```bash
-   # Download your custom blocklist
-   curl https://yoursite.com/custom-blocklist.txt > /tmp/custom.txt
-
-   # Add to CrowdSec
-   while read ip; do
-     cscli decisions add --ip "$ip" --origin custom-blocklist
-   done < /tmp/custom.txt
+   ```toml
+   [[feeds]]
+   name = "My ISP blocklist"
+   url = "https://example.com/blocklist.txt"
    ```
 
-3. **Use custom wrapper script:**
-   Create a script that combines blocklist-import with your custom sources.
+Feeds from either mechanism go through the same dedup, allowlist, and MAX_DECISIONS pipeline as the built-in feeds, and show up in `--list-sources`.
 
-4. **Future releases:**
-   Config file support (YAML/TOML) for custom sources is under consideration.
+Adding a new **built-in** feed for everyone still takes a code change - see [CONTRIBUTING](../CONTRIBUTING.md).
 
 ---
 

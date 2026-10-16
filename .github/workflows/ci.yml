@@ -29,7 +29,7 @@ jobs:
 
       - name: Run pytest
         run: |
-          python -m pytest test_blocklist_import.py test_feed_health_coverage.py test_autopilot_report.py test_autopilot_metrics.py test_release_metadata.py -v
+          python -m pytest --ignore=tests -v
 
       - name: Check Python syntax
         run: |
@@ -189,4 +189,44 @@ jobs:
             gh release create "$TAG" \
               --title "Release $TAG" \
               --notes-file release_notes.txt
+          fi
+
+  docker-smoke:
+    name: Docker image smoke (custom feeds file)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t cbi-feeds-smoke .
+
+      - name: JSON feeds file validates and lists in-container
+        run: |
+          docker run --rm \
+            -e FEEDS_FILE=/feeds/feeds-smoke.json \
+            -e CROWDSEC_LAPI_KEY=smoke \
+            -v "$PWD/tests/fixtures:/feeds:ro" \
+            cbi-feeds-smoke --validate 2>&1 | tee json.out
+          grep -q "Smoke JSON feed (enabled)" json.out
+
+      - name: TOML feeds file validates and lists in-container
+        run: |
+          docker run --rm \
+            -e FEEDS_FILE=/feeds/feeds-smoke.toml \
+            -e CROWDSEC_LAPI_KEY=smoke \
+            -v "$PWD/tests/fixtures:/feeds:ro" \
+            cbi-feeds-smoke --validate 2>&1 | tee toml.out
+          grep -q "Smoke TOML feed (enabled)" toml.out
+
+      - name: Missing feeds file fails in-container
+        run: |
+          if docker run --rm \
+            -e FEEDS_FILE=/feeds/missing.json \
+            -e CROWDSEC_LAPI_KEY=smoke \
+            -v "$PWD/tests/fixtures:/feeds:ro" \
+            cbi-feeds-smoke --validate; then
+            echo "expected a non-zero exit for a missing feeds file" >&2
+            exit 1
           fi

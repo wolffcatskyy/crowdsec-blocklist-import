@@ -330,6 +330,32 @@ CUSTOM_BLOCKLISTS="https://example.com/alibaba.txt,https://example.com/facebook.
 
 Each URL is added as its own source (`custom_blocklist_0`, `custom_blocklist_1`, ...) and goes through the same dedup, allowlist, and MAX_DECISIONS logic as the built-in feeds.
 
+### Custom Feeds File
+
+For feeds you keep long-term - with names, parsing options, and license notes - point `FEEDS_FILE` at a TOML or JSON file instead of editing code:
+
+```bash
+FEEDS_FILE=/config/feeds.toml
+```
+
+```toml
+# feeds.toml - one [[feeds]] table per feed
+[[feeds]]
+name = "My ISP blocklist"
+url = "https://example.com/blocklist.txt"
+comment_char = ";"
+extract_field = 0
+license = "internal"
+license_note = "Private feed, do not redistribute"
+
+[[feeds]]
+name = "Vendor threat feed"
+url = "https://vendor.example.com/ips.txt"
+enabled = false   # declared but off until flipped
+```
+
+JSON works too (`{"feeds": [{"name": "...", "url": "..."}]}`) and needs nothing extra; TOML uses the Python 3.11+ standard library, or `pip install 'crowdsec-blocklist-import[toml]'` on older Pythons. Feeds from the file import like built-in sources (same dedup, allowlist, and MAX_DECISIONS handling), appear in `--list-sources` under their own heading, and accept `FEED_CONFIDENCE` overrides. The file is declarative: it can only name feeds and parsing options, never run code. See the [Configuration Reference](docs/config-reference.md#custom-feeds-file) for every supported key.
+
 ### Allowlists
 
 Protect trusted IPs from being blocked:

@@ -198,6 +198,8 @@ LOG_LEVEL=DEBUG python blocklist_import.py 2>&1 | less
 
 ## How to Add a New Blocklist Source
 
+> Private or local feeds no longer need this recipe: `CUSTOM_BLOCKLISTS` covers plain URL lists and `FEEDS_FILE` (TOML/JSON) covers named feeds with parsing options. Use this recipe when proposing a new **built-in** feed for everyone.
+
 1. **Find the blocklist URL** (should be a plain-text IP/CIDR list)
 2. **Determine the format**:
    - Comment character (usually `#` or `;`)

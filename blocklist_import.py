@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import logging
 import os
 import platform
@@ -37,6 +38,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Generator, Optional, Set, Callable
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -180,6 +182,9 @@ class BlocklistSource:
     attribution_required: Optional[bool] = None
     commercial_ok: Optional[bool] = None
     license_note: str = ""
+    # Provenance: where this source came from ("built-in", "CUSTOM_BLOCKLISTS",
+    # or "feeds file (<path>)"), surfaced in logs and --list-sources.
+    origin: str = "built-in"
 
     def __post_init__(self):
         if self.get_headers is None:
@@ -723,6 +728,203 @@ def build_scenario(config: "Config", source_name: Optional[str]) -> str:
 
 
 # =============================================================================
+# Custom feeds file (FEEDS_FILE)
+# =============================================================================
+#
+# FEEDS_FILE points at a TOML or JSON file declaring extra blocklist feeds,
+# so private or unlisted sources can be imported without editing code:
+#
+#   # feeds.toml
+#   [[feeds]]
+#   name = "My ISP blocklist"
+#   url = "https://example.com/blocklist.txt"
+#   comment_char = ";"      # parsing options match the built-in sources
+#   extract_field = 0
+#
+#   // feeds.json
+#   {"feeds": [{"name": "My ISP blocklist", "url": "https://example.com/x.txt"}]}
+#
+# TOML needs Python 3.11+ (stdlib tomllib) or the tomli package
+# (pip install 'crowdsec-blocklist-import[toml]'); JSON works on every
+# supported Python. Feeds from the file go through the same fetch, dedup,
+# allowlist and MAX_DECISIONS pipeline as built-in sources and appear in
+# --list-sources under their own heading so their provenance stays visible.
+# The file is declarative only: it can name feeds and parsing options, it
+# cannot run code.
+
+FEEDS_FILE_MAX_FEEDS = 256
+
+_FEEDS_FILE_KEYS = {
+    "name",
+    "url",
+    "enabled",
+    "comment_char",
+    "extract_field",
+    "field_separator",
+    "rate_limited",
+    "license",
+    "attribution_required",
+    "commercial_ok",
+    "license_note",
+}
+
+
+class FeedConfigError(Exception):
+    """Raised when the FEEDS_FILE custom feeds file is missing or invalid."""
+
+
+def _load_feeds_data(path: str) -> object:
+    """Read and parse a feeds file (.toml or .json) into raw Python data."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise FeedConfigError(f"cannot read {path}: {exc}") from exc
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".json":
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise FeedConfigError(f"{path}: invalid JSON: {exc}") from exc
+    if ext != ".toml":
+        raise FeedConfigError(f"{path}: feeds file must be a .toml or .json file, got {ext or '(no extension)'!r}")
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        try:
+            import tomli as tomllib
+        except ModuleNotFoundError:
+            raise FeedConfigError(
+                f"{path}: TOML feeds files need Python 3.11+ or the tomli package; "
+                "use a .json feeds file or: pip install tomli"
+            ) from None
+    try:
+        return tomllib.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise FeedConfigError(f"{path}: invalid TOML: {exc}") from exc
+
+
+def _feed_entry_label(entry: object, index: int) -> str:
+    if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"].strip():
+        return f"feed #{index} ({entry['name'].strip()!r})"
+    return f"feed #{index}"
+
+
+def _parse_feeds_file(path: str) -> list[tuple[BlocklistSource, bool]]:
+    """Parse and validate a feeds file into (source, enabled) pairs.
+
+    Raises FeedConfigError with a precise message on any problem: an
+    unreadable file, invalid TOML/JSON, unknown keys, wrong types, duplicate
+    names, or a name colliding with a built-in feed. Fail-loud on purpose: a
+    silently ignored feeds file would look like protection that is not
+    actually running.
+    """
+    data = _load_feeds_data(path)
+    if not isinstance(data, dict) or not isinstance(data.get("feeds"), list):
+        raise FeedConfigError(f"{path}: expected a 'feeds' list ([[feeds]] tables in TOML, a feeds array in JSON)")
+    entries = data["feeds"]
+    if len(entries) > FEEDS_FILE_MAX_FEEDS:
+        raise FeedConfigError(f"{path}: {len(entries)} feeds exceeds the {FEEDS_FILE_MAX_FEEDS}-feed limit")
+    builtin_slugs = {feed_slug(s.name) for s in BLOCKLIST_SOURCES}
+    seen_slugs: set[str] = set()
+    sources: list[tuple[BlocklistSource, bool]] = []
+    for index, entry in enumerate(entries, start=1):
+        label = _feed_entry_label(entry, index)
+        if not isinstance(entry, dict):
+            raise FeedConfigError(f"{path}: {label}: each feed must be a table/object of keys")
+        unknown = sorted(set(entry) - _FEEDS_FILE_KEYS)
+        if unknown:
+            raise FeedConfigError(
+                f"{path}: {label}: unknown keys: {', '.join(unknown)} "
+                f"(valid keys: {', '.join(sorted(_FEEDS_FILE_KEYS))})"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise FeedConfigError(f"{path}: {label}: 'name' is required and must be a non-empty string")
+        name = name.strip()
+        if len(name) > 80:
+            raise FeedConfigError(f"{path}: {label}: name is too long ({len(name)} > 80 characters)")
+        slug = feed_slug(name)
+        if not slug:
+            raise FeedConfigError(f"{path}: {label}: name must contain at least one letter or digit")
+        if slug in builtin_slugs:
+            raise FeedConfigError(
+                f"{path}: {label}: name collides with a built-in feed; "
+                "rename it or control the built-in feed with its ENABLE_* variable"
+            )
+        if slug in seen_slugs:
+            raise FeedConfigError(f"{path}: {label}: duplicate feed name (same slug {slug!r} as another entry)")
+        seen_slugs.add(slug)
+        url = entry.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise FeedConfigError(f"{path}: {label}: 'url' is required and must be a non-empty string")
+        url = url.strip()
+        if any(c.isspace() for c in url):
+            raise FeedConfigError(f"{path}: {label}: url must not contain whitespace")
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise FeedConfigError(f"{path}: {label}: url must be an http(s) URL, got {url!r}")
+        if parsed.username or parsed.password:
+            raise FeedConfigError(
+                f"{path}: {label}: credentials in URLs are not accepted; keep feed credentials out of the feeds file"
+            )
+        enabled = entry.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise FeedConfigError(f"{path}: {label}: 'enabled' must be true or false")
+        comment_char = entry.get("comment_char", "#")
+        if not isinstance(comment_char, str) or len(comment_char) != 1:
+            raise FeedConfigError(f"{path}: {label}: 'comment_char' must be a single character")
+        extract_field = entry.get("extract_field")
+        if extract_field is not None and (
+            not isinstance(extract_field, int) or isinstance(extract_field, bool) or extract_field < 0
+        ):
+            raise FeedConfigError(f"{path}: {label}: 'extract_field' must be an integer >= 0")
+        field_separator = entry.get("field_separator", " ")
+        if not isinstance(field_separator, str) or len(field_separator) != 1:
+            raise FeedConfigError(f"{path}: {label}: 'field_separator' must be a single character")
+        rate_limited = entry.get("rate_limited", False)
+        if not isinstance(rate_limited, bool):
+            raise FeedConfigError(f"{path}: {label}: 'rate_limited' must be true or false")
+        license_name = entry.get("license", "unknown")
+        if not isinstance(license_name, str):
+            raise FeedConfigError(f"{path}: {label}: 'license' must be a string")
+        attribution_required = entry.get("attribution_required")
+        if attribution_required is not None and not isinstance(attribution_required, bool):
+            raise FeedConfigError(f"{path}: {label}: 'attribution_required' must be true or false")
+        commercial_ok = entry.get("commercial_ok")
+        if commercial_ok is not None and not isinstance(commercial_ok, bool):
+            raise FeedConfigError(f"{path}: {label}: 'commercial_ok' must be true or false")
+        license_note = entry.get("license_note", "")
+        if not isinstance(license_note, str):
+            raise FeedConfigError(f"{path}: {label}: 'license_note' must be a string")
+        sources.append(
+            (
+                BlocklistSource(
+                    name=name,
+                    url=url,
+                    enabled_key="feeds_file",
+                    comment_char=comment_char,
+                    extract_field=extract_field,
+                    field_separator=field_separator,
+                    rate_limited=rate_limited,
+                    license=license_name,
+                    attribution_required=attribution_required,
+                    commercial_ok=commercial_ok,
+                    license_note=license_note,
+                    origin=f"feeds file ({path})",
+                ),
+                enabled,
+            )
+        )
+    return sources
+
+
+def load_feeds_file(path: str) -> list[BlocklistSource]:
+    """Load the enabled feeds declared by a FEEDS_FILE feeds file."""
+    return [source for source, enabled in _parse_feeds_file(path) if enabled]
+
+
+# =============================================================================
 # Environment Variable Validation
 # =============================================================================
 
@@ -888,6 +1090,12 @@ class Config:
     # Processing settings
     allow_list: Optional[list[str]] = None
     custom_block_lists: Optional[list[str]] = None
+    # Declarative custom feeds file (FEEDS_FILE, TOML or JSON). Empty = off.
+    feeds_file: str = ""
+    # Sources loaded from feeds_file by main(), validated up front so a bad
+    # file fails before any LAPI connection. None = not loaded yet;
+    # run_import loads on demand for programmatic callers.
+    feeds_file_sources: Optional[list[BlocklistSource]] = None
     batch_size: int = 1000
     fetch_timeout: int = 60
     max_retries: int = 3
@@ -1066,6 +1274,7 @@ class Config:
             allow_list=[x.strip() for x in os.getenv("ALLOWLIST", "").split(",") if x.strip()],
             allowlist_github=get_bool("ALLOWLIST_GITHUB", False),
             custom_block_lists=[x.strip() for x in os.getenv("CUSTOM_BLOCKLISTS", "").split(",") if x.strip()],
+            feeds_file=os.getenv("FEEDS_FILE", "").strip(),
             refresh_period_frequent_mn=int(os.getenv("REFRESH_PERIOD_FREQUENT_MN", "90")),
             refresh_period_limited_mn=int(os.getenv("REFRESH_PERIOD_LIMITED_MN", "330")),
             batch_size=int(os.getenv("BATCH_SIZE", "1000")),
@@ -1123,7 +1332,7 @@ def _tristate(value: Optional[bool]) -> str:
     return {True: "yes", False: "no"}.get(value, "unknown")
 
 
-def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
+def list_blocklist_sources(logger: logging.Logger, fmt: str = "text", feeds_file: str = "") -> None:
     """Print a formatted list of all available blocklist sources.
 
     Includes preset membership and license metadata (license,
@@ -1180,6 +1389,29 @@ def list_blocklist_sources(logger: logging.Logger, fmt: str = "text") -> None:
                 logger.info(f"        note: {source.license_note}")
 
     logger.info("")
+
+    # Custom feeds declared via FEEDS_FILE, under their own heading so the
+    # provenance (user-supplied file, not a reviewed built-in) stays visible.
+    if feeds_file:
+        try:
+            custom_feeds = _parse_feeds_file(feeds_file)
+        except FeedConfigError as exc:
+            custom_feeds = []
+            logger.info(f"  FEEDS_FILE ({feeds_file}) could not be loaded: {exc}")
+        if custom_feeds:
+            logger.info(f"  Custom feeds from FEEDS_FILE ({feeds_file}):")
+            for source, enabled in custom_feeds:
+                state = "enabled" if enabled else "disabled in file"
+                logger.info(f"    - {source.name} ({state})")
+                logger.info(f"        url: {source.url}")
+                logger.info(
+                    f"        license: {source.license} | "
+                    f"attribution_required: {_tristate(source.attribution_required)} | "
+                    f"commercial_ok: {_tristate(source.commercial_ok)}"
+                )
+                if source.license_note:
+                    logger.info(f"        note: {source.license_note}")
+            logger.info("")
 
 
 # =============================================================================
@@ -2848,7 +3080,23 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
     if config.custom_block_lists:
         for i, url in enumerate(config.custom_block_lists):
             if url:
-                enabled_sources.append(BlocklistSource(f"custom_blocklist_{i}", url, enabled_key="custom_blocklists"))
+                enabled_sources.append(
+                    BlocklistSource(
+                        f"custom_blocklist_{i}", url,
+                        enabled_key="custom_blocklists", origin="CUSTOM_BLOCKLISTS",
+                    )
+                )
+    feeds_file_sources = config.feeds_file_sources
+    if feeds_file_sources is None and config.feeds_file:
+        # main() loads and validates the feeds file up front; this path covers
+        # programmatic callers that build Config themselves.
+        feeds_file_sources = load_feeds_file(config.feeds_file)
+    if feeds_file_sources:
+        enabled_sources.extend(feeds_file_sources)
+        logger.info(
+            f"Loaded {len(feeds_file_sources)} custom feed(s) from FEEDS_FILE "
+            f"({config.feeds_file}): {', '.join(s.name for s in feeds_file_sources)}"
+        )
 
     # Guardrail (v3.9): an empty import must never look like success. A run
     # with zero enabled feeds exits non-zero with a clear message instead of
@@ -2858,7 +3106,7 @@ def run_import(config: Config, logger: logging.Logger) -> ImportStats:
         logger.error(
             "No blocklist feeds are enabled - refusing to run with an empty "
             "feed set. Set PRESET=embedded|server|max, enable feeds with "
-            "ENABLE_*=true, or add CUSTOM_BLOCKLISTS. See --list-sources."
+            "ENABLE_*=true, CUSTOM_BLOCKLISTS, or FEEDS_FILE. See --list-sources."
         )
         stats.fatal_no_feeds = True
         stats.duration_seconds = time.time() - start_time
@@ -3368,6 +3616,8 @@ Environment Variables:
                            for every ENABLE_* switch; explicit ENABLE_* values win.
   BLOCKLISTS_OPT_IN        Set to true to make unset feeds default to disabled
   FAIL_ON_DEAD_FEED        Set to true to exit non-zero when any enabled feed fails
+  FEEDS_FILE               Path to a TOML or JSON file declaring extra custom feeds
+                           (declarative, no code changes; see docs/config-reference.md)
 
   ENABLE_IPSUM             Enable IPsum blocklist (default: true)
   ENABLE_SPAMHAUS          Enable Spamhaus DROP (default: true)
@@ -3564,10 +3814,20 @@ def main() -> int:
     # Setup logging
     logger = setup_logging(config)
 
+    # Load the custom feeds file up front: a broken file fails fast here,
+    # ahead of any LAPI connection, and --list-sources / --validate can show
+    # the declared feeds.
+    if config.feeds_file:
+        try:
+            config.feeds_file_sources = load_feeds_file(config.feeds_file)
+        except FeedConfigError as exc:
+            logger.error(f"FEEDS_FILE: {exc}")
+            return 1
+
     # Handle --list-sources flag
     if args.list_sources:
         logger.info(f"CrowdSec Blocklist Import v{__version__}")
-        list_blocklist_sources(logger, fmt=args.format)
+        list_blocklist_sources(logger, fmt=args.format, feeds_file=config.feeds_file)
         return 0
 
     # Validate ENABLE_* environment variables
@@ -3589,7 +3849,7 @@ def main() -> int:
         logger.info(f"CrowdSec Blocklist Import v{__version__}")
         logger.info("Configuration validation passed!")
         logger.info("")
-        list_blocklist_sources(logger, fmt=args.format)
+        list_blocklist_sources(logger, fmt=args.format, feeds_file=config.feeds_file)
         return 0
 
     # Initialize Prometheus metrics
