@@ -108,6 +108,42 @@ jobs:
           docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' \
             | grep -F "${REGISTRY}/${IMAGE_NAME}" || docker images | head -10
 
+      - name: Smoke-test the built image (module imports + report-only impact preview)
+        if: github.event_name == 'pull_request'
+        env:
+          TELEMETRY_ENABLED: "false"
+          METRICS_ENABLED: "false"
+        run: |
+          IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep -F "${REGISTRY}/${IMAGE_NAME}" | head -1)
+          [ -n "$IMAGE" ] || { echo "::error::Built image not found in daemon"; exit 1; }
+          echo "Smoke-testing $IMAGE"
+
+          # Every application module must be importable inside the image.
+          docker run --rm --entrypoint python "$IMAGE" -c \
+            "import blocklist_import, impact_preview, setup_wizard, autopilot_report, autopilot_metrics; print('module imports ok')"
+
+          # The packaged CLI must expose the preview flags.
+          docker run --rm "$IMAGE" --help | grep -q -- "--impact-preview"
+
+          # Report-only preview against a synthetic RFC 5737 fixture log:
+          # no real logs, no LAPI, no feed changes. PRESET=embedded keeps the
+          # fetch small; failed feeds degrade the report but not the exit code.
+          docker run --rm \
+            -e PRESET=embedded \
+            -e TELEMETRY_ENABLED=false \
+            -e METRICS_ENABLED=false \
+            -v "$PWD/tests/fixtures:/fixtures:ro" \
+            --entrypoint sh \
+            "$IMAGE" -c '
+              python blocklist_import.py \
+                --impact-preview /fixtures/impact-probe.log \
+                --impact-preview-html /tmp/impact-report.html \
+              && test -s /tmp/impact-report.html \
+              && grep -qi "no decisions were added" /tmp/impact-report.html \
+              && echo "impact preview smoke ok"
+            '
+
       - name: Verify pinned tag is published on registry
         if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')
         run: |

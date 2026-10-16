@@ -1,0 +1,6 @@
+# Synthetic CI fixture for the Docker image smoke test.
+# RFC 5737 documentation-range addresses only - not real traffic.
+203.0.113.7 - - [16/Oct/2026:02:00:00 +0000] "GET / HTTP/1.1" 200
+198.51.100.23 sshd[1]: Failed password for invalid user admin
+192.0.2.99 - - [16/Oct/2026:02:00:01 +0000] "POST /login HTTP/1.1" 403
+10.0.0.5 internal healthcheck
