@@ -211,6 +211,58 @@ Each blocklist source can be individually enabled or disabled. By default, block
 
 ---
 
+## Custom Feeds File
+
+`FEEDS_FILE` points at a TOML or JSON file declaring extra blocklist feeds, so private or unlisted sources can be imported without editing code. Empty (the default) means no file is loaded and nothing changes.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| FEEDS_FILE | Path to a `.toml` or `.json` feeds file | `/config/feeds.toml` |
+
+```toml
+# feeds.toml - one [[feeds]] table per feed
+[[feeds]]
+name = "My ISP blocklist"
+url = "https://example.com/blocklist.txt"
+enabled = true
+comment_char = ";"
+extract_field = 0
+field_separator = " "
+rate_limited = false
+license = "internal"
+attribution_required = true
+commercial_ok = false
+license_note = "Private feed, do not redistribute"
+```
+
+```json
+{"feeds": [{"name": "My ISP blocklist", "url": "https://example.com/blocklist.txt"}]}
+```
+
+| Key | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `name` | yes | - | Feed name (max 80 chars). Must be unique in the file and must not match a built-in feed |
+| `url` | yes | - | `http(s)` URL of a plain-text IP/CIDR list. Credentials in URLs are rejected |
+| `enabled` | no | `true` | `false` declares the feed without importing it |
+| `comment_char` | no | `#` | Single character starting comment lines |
+| `extract_field` | no | - | 0-based field index to extract from each line (e.g. `0` for `192.0.2.0/24 ; comment`) |
+| `field_separator` | no | space | Single character separating fields |
+| `rate_limited` | no | `false` | Treat the feed as rate-limited (longer refresh period) |
+| `license` | no | `unknown` | License name, shown by `--list-sources` |
+| `attribution_required` | no | - | `true`/`false`, shown by `--list-sources` |
+| `commercial_ok` | no | - | `true`/`false`, shown by `--list-sources` |
+| `license_note` | no | - | Free-text license note, shown by `--list-sources` |
+
+### Notes on the Custom Feeds File
+
+- **Formats:** JSON works on every supported Python. TOML uses the Python 3.11+ standard library (`tomllib`); on 3.9/3.10 install the optional extra: `pip install 'crowdsec-blocklist-import[toml]'`.
+- **Validation:** the file is parsed and validated at startup, before any LAPI connection. Unknown keys, wrong types, duplicates, or bad URLs exit non-zero with a precise error - a broken feeds file never looks like a successful run.
+- **Pipeline:** feeds from the file import exactly like built-in sources (dedup, allowlists, MAX_DECISIONS, scenarios, `FEED_CONFIDENCE` overrides) and appear in `--list-sources` under a separate "Custom feeds" heading with their provenance.
+- **Declarative only:** the file can name feeds and parsing options; it cannot run code. Up to 256 feeds per file.
+- **Precedence:** feeds from the file are added after built-in sources and `CUSTOM_BLOCKLISTS`. Built-in feeds keep their `ENABLE_*` switches; the file cannot override them.
+
+---
+
 ## Docker Secrets Support
 
 For secure credential management in Docker/Kubernetes environments, use the `_FILE` suffix pattern.
