@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com), and this 
 
 ### Added
 
+- **Avastel proxy bot IPs feed (opt-in)** - New source: antoinevastel's daily 8-day proxy-bot blocklist (~300 CIDRs over residential, datacenter, ISP, and public proxy infrastructure; MIT license), following the suitability review promised in issue #114. Only the provider's blocking tier is imported: rows below confidence 1.0, which the provider flags as mixed traffic, are filtered out during parsing, and his high-volume 1-day list (explicitly not for blocking) is not used. Proxies are shared infrastructure, so expect legitimate-user overlap. It is an explicit opt-in feed: `ENABLE_AVASTEL` stays off under every preset (including `max`), `BLOCKLISTS_OPT_IN` mode, and the legacy all-on default - only `ENABLE_AVASTEL=true` enables it. Default confidence 50; override with `FEED_CONFIDENCE="avastel-proxy-bot-ips=NN"`.
+
 - **Custom feeds file (`FEEDS_FILE`)** - Declare extra blocklist feeds in a TOML or JSON file (names, URLs, comment characters, field extraction, rate limiting, and license metadata) without editing code. Feeds from the file import like built-in sources (same dedup, allowlist, and MAX_DECISIONS handling), appear in `--list-sources` under their own heading, and accept `FEED_CONFIDENCE` overrides. TOML uses the Python 3.11+ standard library, or the optional `tomli` extra on older Pythons; JSON works everywhere. Invalid files fail at startup with a precise error, before any LAPI connection. The file is declarative only - it cannot run code.
 
 ---

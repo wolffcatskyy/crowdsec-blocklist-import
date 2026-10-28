@@ -3,7 +3,7 @@
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
 
-**Import 32 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
+**Import 33 threat intelligence feeds into CrowdSec with automatic deduplication, normalization, and real-time sync.**
 
 > [!WARNING]
 > **Defaults are changing in v4.0.0.** Today, with no configuration, every feed is enabled. v4.0.0 will switch the no-config fallback to `PRESET=server` (a conservative, high-confidence set). Set `PRESET=max` to keep the current behavior, or `PRESET=embedded` for UDM/UDR-class devices. v3.9 adds `PRESET=`, per-feed health metrics, `FAIL_ON_DEAD_FEED`, and per-feed license metadata in `--list-sources` - see the [changelog](CHANGELOG.md).
@@ -17,13 +17,13 @@
 [![Awesome CrowdSec](https://img.shields.io/badge/awesome-crowdsec-green?style=flat-square)](https://github.com/wolffcatskyy/awesome-crowdsec)
 
 ```
-  Threat Feeds (32)           crowdsec-blocklist-import           CrowdSec LAPI
+  Threat Feeds (33)           crowdsec-blocklist-import           CrowdSec LAPI
  ┌──────────────────┐        ┌────────────────────────┐        ┌──────────────┐
  │ IPsum            │───────>│  Fetch & Normalize     │        │              │
  │ Spamhaus DROP    │───────>│  Deduplicate vs LAPI   │───────>│  Decisions   │──> Bouncers
  │ Firehol L1/L2/L3 │───────>│  Batch Import          │        │  Database    │    (fw, CDN,
  │ Abuse.ch Feodo   │───────>│  Allowlist Filtering   │        │              │     nginx...)
- │ 27 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
+ │ 28 more feeds... │───────>│  Webhook + Metrics     │        └──────────────┘
  └──────────────────┘        └────────────────────────┘
 ```
 
@@ -40,7 +40,7 @@ Most blocklist tools suffer from a critical flaw: **staleness**. They fetch bloc
 
 **crowdsec-blocklist-import solves this:**
 
-- **Fresh IPs propagate instantly** -- New threats from 32 feeds hit your network within minutes, not days
+- **Fresh IPs propagate instantly** -- New threats from 33 feeds hit your network within minutes, not days
 - **Expired threats are removed immediately** -- Recovered IPs are automatically delisted, not held for weeks
 - **No cron delays** -- Run hourly or on-demand via built-in scheduler
 - **No stale drift** -- Every sync is a complete refresh; no orphaned entries linger
@@ -404,6 +404,7 @@ crowdsec-blocklist-import pulls from 32 threat intelligence sources:
 | **StopForumSpam** | Forum spam sources | Spam |
 | **Sentinel** | Turris greylist (community-sourced threat intelligence) | Threats |
 | **Data-Shield IPv4** | Curated malicious IPv4 registry (duggytuxy; opt-in, off by default) | Threats |
+| **Avastel proxy bot IPs** | Daily proxy-infrastructure blocklist, provider confidence-filtered (antoinevastel; opt-in, off by default) | Proxies |
 | **Tor Exit Nodes** | Tor network exit points | Privacy |
 | **Scanner IPs** | Shodan, Censys, Internet scanners | Scanners |
 

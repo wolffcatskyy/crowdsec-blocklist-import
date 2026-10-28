@@ -201,6 +201,7 @@ Each blocklist source can be individually enabled or disabled. By default, block
 | ENABLE_VXVAULT | VXvault malware sample repository IPs | `true` |
 | ENABLE_SENTINEL | Sentinel Turris greylist (community-sourced threat intelligence) | `true` |
 | ENABLE_DATA_SHIELD | Data-Shield IPv4 blocklist (duggytuxy; GPL-3.0). Opt-in: off under every preset, `BLOCKLISTS_OPT_IN`, and the legacy default; only an explicit `true` enables it | `false` |
+| ENABLE_AVASTEL | Avastel proxy bot IPs 8-day blocklist (antoinevastel; MIT). Imports only the provider's confidence-1.0 blocking-tier ranges; proxies are shared infrastructure with expected legitimate-user overlap. Opt-in: off under every preset, `BLOCKLISTS_OPT_IN`, and the legacy default; only an explicit `true` enables it | `false` |
 
 ### Notes on Blocklist Toggles
 
