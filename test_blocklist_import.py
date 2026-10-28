@@ -2801,12 +2801,15 @@ class TestLicenseMetadata:
             assert source.attribution_required in (True, False, None)
             assert source.commercial_ok in (True, False, None)
 
-    def test_spamhaus_drop_commercial_ok_with_attribution(self):
+    def test_spamhaus_drop_metadata_matches_owning_terms(self):
+        # Source: https://www.spamhaus.org/blocklists/drop-fair-use-policy/
+        # The Terms grant free use subject to conditions, no IP license, and
+        # prohibit the Spamhaus name in marketing/commercial materials - so
+        # no blanket commercial_ok=True and no attribution requirement.
         spamhaus = next(s for s in bi.BLOCKLIST_SOURCES if s.name == "Spamhaus DROP")
-        # Spamhaus DROP is free for any use (including commercial) with credit;
-        # the non-commercial limits apply to Spamhaus DNSBLs, not DROP.
-        assert spamhaus.commercial_ok is True
-        assert spamhaus.attribution_required is True
+        assert spamhaus.commercial_ok is not True
+        assert spamhaus.attribution_required is not True
+        assert "drop-fair-use-policy" in spamhaus.license_note
 
     def test_restricted_feeds_flagged_not_commercial_ok(self):
         by_name = {}
@@ -2823,7 +2826,7 @@ class TestLicenseMetadata:
             bi.list_blocklist_sources(log)
         assert "commercial_ok" in caplog.text
         assert "attribution_required" in caplog.text
-        assert "Spamhaus DROP terms" in caplog.text
+        assert "Spamhaus DROP Terms of Use" in caplog.text
         assert "presets: embedded" in caplog.text
 
 
@@ -3029,3 +3032,86 @@ class TestStructuredScenarios:
         payload = session_mock.post.call_args.kwargs["json"][0]
         assert payload["scenario"] == "external/blocklist-import/feodo-tracker/c95"
         assert payload["decisions"][0]["scenario"] == "external/blocklist-import/feodo-tracker/c95"
+
+
+
+# ===========================================================================
+# 13. Provider minimum-interval enforcement + feed license metadata
+# ===========================================================================
+
+
+class TestProviderIntervalFloor:
+    """Daemon mode must not fetch faster than a provider's published minimum."""
+
+    def test_default_config_floor_from_dan_me_uk(self, clean_env):
+        config = Config()
+        floor, names = bi.provider_interval_floor_seconds(config)
+        assert floor == 1800
+        assert names == ["Tor (dan.me.uk)"]
+
+    def test_floor_zero_when_tor_disabled(self, clean_env):
+        config = Config(enable_tor=False)
+        floor, names = bi.provider_interval_floor_seconds(config)
+        assert floor == 0
+        assert names == []
+
+    def test_floor_zero_in_frequent_mode(self, clean_env):
+        # "frequent" mode skips rate-limited sources, so none impose a floor.
+        config = Config(mode="frequent")
+        floor, names = bi.provider_interval_floor_seconds(config)
+        assert floor == 0
+        assert names == []
+
+    def test_floor_applies_in_limited_mode(self, clean_env):
+        config = Config(mode="limited")
+        floor, _ = bi.provider_interval_floor_seconds(config)
+        assert floor == 1800
+
+    def test_apply_clamps_short_interval(self, clean_env, caplog):
+        config = Config(interval=300)
+        with caplog.at_level(logging.WARNING):
+            clamped = bi.apply_provider_interval_floor(config, logging.getLogger("test"))
+        assert clamped is True
+        assert config.interval == 1800
+        assert "dan.me.uk" in caplog.text
+
+    def test_apply_leaves_sufficient_interval(self, clean_env):
+        config = Config(interval=3600)
+        assert bi.apply_provider_interval_floor(config, logging.getLogger("test")) is False
+        assert config.interval == 3600
+
+    def test_apply_leaves_run_once(self, clean_env):
+        config = Config(interval=0)
+        assert bi.apply_provider_interval_floor(config, logging.getLogger("test")) is False
+        assert config.interval == 0
+
+
+class TestSpamhausDropMetadata:
+    """Spamhaus DROP license metadata must match the owning Terms of Use.
+
+    Source: https://www.spamhaus.org/blocklists/drop-fair-use-policy/
+    """
+
+    def _source(self):
+        for source in bi.BLOCKLIST_SOURCES:
+            if source.name == "Spamhaus DROP":
+                return source
+        raise AssertionError("Spamhaus DROP source not found")
+
+    def test_no_blanket_free_for_any_use_claim(self):
+        note = self._source().license_note
+        assert "Free for any use" not in note
+
+    def test_note_references_owning_terms(self):
+        note = self._source().license_note
+        assert "spamhaus.org/blocklists/drop-fair-use-policy" in note
+        assert "marketing" in note  # the Terms prohibit name use in marketing
+
+    def test_commercial_use_not_blanket_ok(self):
+        # The Terms grant no IP license and bar name use in commercial
+        # materials; commercial_ok must not be an unconditional True.
+        assert self._source().commercial_ok is not True
+
+    def test_attribution_not_required_by_terms(self):
+        # The Terms do not require credit; they restrict name use instead.
+        assert self._source().attribution_required is not True
