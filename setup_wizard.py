@@ -34,6 +34,7 @@ GROUP_META = {
     "ENABLE_VXVAULT":           ("VXVault",            "Malware hosting IPs"),
     "ENABLE_SENTINEL":          ("Sentinel",           "Turris Sentinel greylist"),
     "ENABLE_DATA_SHIELD":       ("Data-Shield IPv4",   "duggytuxy curated IPv4 blocklist (opt-in, default off)"),
+    "ENABLE_AVASTEL":           ("Avastel proxy bot IPs", "antoinevastel proxy blocklist, confidence-filtered (opt-in, default off)"),
 }
 
 # Ordered list used for display (matches VALID_ENABLE_VARS ordering)
@@ -43,7 +44,7 @@ ORDERED_ENABLE_KEYS = [
     "ENABLE_BRUTEFORCE_BLOCKER", "ENABLE_DSHIELD", "ENABLE_CI_ARMY", "ENABLE_BOTVRIJ",
     "ENABLE_GREENSNOW", "ENABLE_STOPFORUMSPAM", "ENABLE_TOR", "ENABLE_SCANNERS",
     "ENABLE_ABUSE_IPDB", "ENABLE_CYBERCRIME_TRACKER",
-    "ENABLE_VXVAULT", "ENABLE_SENTINEL", "ENABLE_DATA_SHIELD",
+    "ENABLE_VXVAULT", "ENABLE_SENTINEL", "ENABLE_DATA_SHIELD", "ENABLE_AVASTEL",
 ]
 
 # Presets
@@ -174,7 +175,7 @@ def prompt_input(prompt, default="", secret=False, confirm=False):
 
 # Opt-in feeds that start OFF in the wizard (matching blocklist_import's
 # _OPT_IN_FEEDS: only an explicit choice turns them on).
-OPT_IN_DEFAULT_OFF = {"ENABLE_DATA_SHIELD"}
+OPT_IN_DEFAULT_OFF = {"ENABLE_DATA_SHIELD", "ENABLE_AVASTEL"}
 
 
 def _is_enabled(state, key):

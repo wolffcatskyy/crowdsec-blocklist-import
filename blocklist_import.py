@@ -155,6 +155,22 @@ def get_normal_can_import(config: Config) -> bool:
     return True
 
 
+def avastel_line_keep(line: str) -> bool:
+    """Keep only the Avastel rows the provider marks as its blocking tier.
+
+    Rows are `cidr;autonomous_system;confidence`; the provider marks
+    confidence 1.0 as appropriate for blocking and flags lower scores as
+    mixed traffic, so lower-scored rows and the header row are dropped.
+    """
+    parts = line.split(";")
+    if len(parts) < 3:
+        return False
+    try:
+        return float(parts[2]) >= 1.0
+    except ValueError:
+        return False
+
+
 def get_abuseipdb_api_can_import(config: Config) -> bool:
     return config.abuseipdb_api_key is not None and config.abuseipdb_api_key != ""
 
@@ -169,6 +185,10 @@ class BlocklistSource:
     comment_char: Optional[str] = "#"
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
     field_separator: Optional[str] = " "
+    # Optional raw-line keep predicate, applied before comment/field handling
+    # (built-in sources only; not expressible in FEEDS_FILE). Used for provider
+    # metadata tiers such as the Avastel confidence column.
+    line_filter: Optional[Callable[[str], bool]] = None
     rate_limited: Optional[bool] = False
     # Published minimum fetch interval (seconds) for providers that cap how
     # often their list may be downloaded (e.g. dan.me.uk's 30-minute Tor list
@@ -442,6 +462,27 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/main/prod_data-shield_ipv4_blocklist.txt",
         enabled_key="enable_data_shield",
     ),
+    # Avastel proxy bot IPs (antoinevastel) - opt-in per the issue #114
+    # review: self-collected proxy infrastructure, including residential and
+    # other shared IPs, so legitimate-user overlap is expected. Only the
+    # provider's blocking-tier list is used, filtered to the confidence 1.0
+    # ranges the provider marks appropriate for blocking; his high-volume
+    # 1-day list is explicitly not for blocking.
+    BlocklistSource(
+        name="Avastel proxy bot IPs",
+        license="MIT",
+        attribution_required=False,
+        commercial_ok=True,
+        license_note=("Proxy IP data self-collected by Antoine Vastel under the MIT license; "
+                      "retain the LICENSE notice when redistributing the data itself. Lists "
+                      "cover residential and other shared proxy IPs, so legitimate-user "
+                      "overlap is expected; only the confidence-1.0 ranges are imported"),
+        url="https://raw.githubusercontent.com/antoinevastel/avastel-bot-ips-lists/master/avastel-proxy-bot-ips-blocklist-8days.txt",
+        enabled_key="enable_avastel",
+        extract_field=0,
+        field_separator=";",
+        line_filter=avastel_line_keep,
+    ),
     # VXVault Malware (FireHOL mirror)
     BlocklistSource(
         name="VXVault",
@@ -570,6 +611,7 @@ _ALWAYS_OFF_FEEDS: set[str] = {
 # as disabled-by-default in discussion #76.
 _OPT_IN_FEEDS: set[str] = {
     "enable_data_shield",       # Data-Shield IPv4 (duggytuxy)
+    "enable_avastel",           # Avastel proxy bot IPs (antoinevastel)
 }
 
 
@@ -659,6 +701,7 @@ FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
     "greensnow": 65,
     "sentinel": 65,
     "data-shield-ipv4": 65,
+    "avastel-proxy-bot-ips": 50,
     "bruteforce-blocker": 65,
     "blocklist-de-all": 60,
     "blocklist-de-apache": 55,
@@ -1165,8 +1208,9 @@ class Config:
     # Exit non-zero when any enabled feed fails to fetch (default: false)
     fail_on_dead_feed: bool = False
 
-    # Blocklist enables (all enabled by default except enable_data_shield,
-    # an explicit opt-in feed that stays off unless ENABLE_DATA_SHIELD=true)
+    # Blocklist enables (all enabled by default except enable_data_shield
+    # and enable_avastel, explicit opt-in feeds that stay off unless their
+    # ENABLE_* var is set true)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
     enable_blocklist_de: bool = True
@@ -1190,6 +1234,7 @@ class Config:
     enable_vxvault: bool = True
     enable_sentinel: bool = True
     enable_data_shield: bool = False
+    enable_avastel: bool = False
 
     @classmethod
     def from_env(cls) -> Config:
@@ -1333,7 +1378,8 @@ class Config:
             enable_cybercrime_tracker=get_bool("ENABLE_CYBERCRIME_TRACKER", feed_default("enable_cybercrime_tracker")),
             enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default("enable_vxvault")),
             enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel")),
-            enable_data_shield=get_bool("ENABLE_DATA_SHIELD", feed_default("enable_data_shield"))
+            enable_data_shield=get_bool("ENABLE_DATA_SHIELD", feed_default("enable_data_shield")),
+            enable_avastel=get_bool("ENABLE_AVASTEL", feed_default("enable_avastel"))
         )
 
 
@@ -2169,6 +2215,11 @@ def extract_ips_from_line(original_line: str, errors: dict[str, int], source: Bl
 
     # Skip empty lines and comments
     if not line or line.startswith(source.comment_char):
+        return
+
+    # Built-in sources may gate raw lines on provider metadata (e.g. the
+    # Avastel confidence column) before comment and field handling.
+    if source.line_filter is not None and not source.line_filter(line):
         return
 
     # Remove inline comments

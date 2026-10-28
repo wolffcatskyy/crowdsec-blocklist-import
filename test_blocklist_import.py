@@ -2724,6 +2724,107 @@ class TestFeedHealthMetrics:
 
 
 # ===========================================================================
+# 13c. Avastel proxy bot IPs: explicit opt-in feed (issue #114)
+# ===========================================================================
+
+
+class TestAvastelOptIn:
+    """Avastel proxy bot IPs is disabled by default everywhere; only an
+    explicit ENABLE_AVASTEL=true turns it on."""
+
+    def _source(self):
+        matches = [s for s in bi.BLOCKLIST_SOURCES if s.name == "Avastel proxy bot IPs"]
+        assert len(matches) == 1
+        return matches[0]
+
+    def test_source_registered(self):
+        src = self._source()
+        assert src.enabled_key == "enable_avastel"
+        assert src.url == (
+            "https://raw.githubusercontent.com/antoinevastel/"
+            "avastel-bot-ips-lists/master/avastel-proxy-bot-ips-blocklist-8days.txt"
+        )
+        assert src.license == "MIT"
+        assert src.extract_field == 0
+        assert src.field_separator == ";"
+        assert src.line_filter is bi.avastel_line_keep
+        assert "ENABLE_AVASTEL" in VALID_ENABLE_VARS
+
+    def test_off_under_legacy_default(self, clean_env):
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is False
+
+    def test_off_under_opt_in_mode(self, clean_env, monkeypatch):
+        monkeypatch.setenv("BLOCKLISTS_OPT_IN", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is False
+
+    @pytest.mark.parametrize("preset", ["embedded", "server", "max"])
+    def test_off_under_every_preset(self, clean_env, monkeypatch, preset):
+        monkeypatch.setenv("PRESET", preset)
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is False
+
+    def test_explicit_enable_turns_on_legacy(self, clean_env, monkeypatch):
+        monkeypatch.setenv("ENABLE_AVASTEL", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is True
+
+    def test_explicit_enable_turns_on_under_preset(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("ENABLE_AVASTEL", "true")
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is True
+
+    def test_explicit_false_stays_off_under_max(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "max")
+        monkeypatch.setenv("ENABLE_AVASTEL", "false")
+        cfg = Config.from_env()
+        assert cfg.enable_avastel is False
+
+    def test_no_preset_membership(self):
+        assert bi.presets_for_key("enable_avastel") == []
+
+    def test_confidence_default(self):
+        assert bi.feed_slug("Avastel proxy bot IPs") == "avastel-proxy-bot-ips"
+        assert bi.feed_confidence("Avastel proxy bot IPs") == 50
+        assert bi.feed_confidence(
+            "Avastel proxy bot IPs", {"avastel-proxy-bot-ips": 80}
+        ) == 80
+
+    def test_only_blocking_tier_rows_imported(self):
+        """The provider marks confidence 1.0 as appropriate for blocking and
+        lower scores as mixed traffic; only 1.0 rows may pass the filter."""
+        src = self._source()
+        errors = {}
+        out = []
+        for line in [
+            "# Avastel 8 day proxy bots IPs blocklist",
+            "# Last update: 2026-10-28 01:01:11.195687",
+            "",
+            "ip_address;autonomous_system;confidence",
+            "85.209.217.0/24;Datacamp Limited;1.0",
+            "203.0.113.0/24;Example ISP;0.95",
+            "198.51.100.0/24;Example ISP;0.5",
+            "192.0.2.0/24;Example ISP;not-a-score",
+        ]:
+            out.extend(bi.extract_ips_from_line(line, errors, src))
+        assert "85.209.217.0/24" in out
+        assert not any("203.0.113" in o for o in out)
+        assert not any("198.51.100" in o for o in out)
+        assert not any("192.0.2" in o for o in out)
+        assert not any("ip_address" in o for o in out)
+
+    def test_line_filter_edge_cases(self):
+        assert bi.avastel_line_keep("1.2.3.0/24;Some AS;1.0") is True
+        assert bi.avastel_line_keep("1.2.3.0/24;Some AS;1.5") is True
+        assert bi.avastel_line_keep("1.2.3.0/24;Some AS;0.99") is False
+        assert bi.avastel_line_keep("1.2.3.0/24;Some AS;abc") is False
+        assert bi.avastel_line_keep("1.2.3.0/24") is False
+        assert bi.avastel_line_keep("") is False
+
+
+# ===========================================================================
 # 16. Zero-feed guardrail + FAIL_ON_DEAD_FEED (v3.9)
 # ===========================================================================
 
