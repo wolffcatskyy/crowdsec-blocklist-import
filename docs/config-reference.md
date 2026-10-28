@@ -127,7 +127,7 @@ Controls import behavior, performance, and output formatting.
 | MAX_RETRIES | `3` | Retry count on failed imports | `1`, `5`, `10` |
 | LOG_LEVEL | `INFO` | Logging verbosity level | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | DRY_RUN | `false` | Preview import without applying decisions | `true`, `false` |
-| INTERVAL | `0` | Built-in scheduler interval in seconds. 0 = single run | `3600`, `86400` |
+| INTERVAL | `0` | Built-in scheduler interval in seconds. 0 = single run. Raised automatically to the largest published provider minimum among enabled feeds (e.g. dan.me.uk Tor: 1800s) | `3600`, `86400` |
 | RUN_ON_START | `true` | In daemon mode, run immediately before waiting for `INTERVAL` | `true`, `false` |
 | CROWDSEC_HEARTBEAT_INTERVAL | `60` | Machine heartbeat interval in seconds. 0 = disabled | `60`, `0` |
 | CONSOLIDATE_ALERTS | `false` | Combine all IPs into a single CrowdSec alert per run | `true`, `false` |

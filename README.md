@@ -260,7 +260,7 @@ api:
 | `DECISION_TYPE` | `ban` | Type of decision (`ban`, `captcha`, `throttle`) |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | `DRY_RUN` | `false` | Preview without importing |
-| `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = single run) |
+| `INTERVAL` | `0` | Daemon mode: seconds between runs (0 = single run). Raised automatically to the largest published provider minimum among enabled feeds (e.g. dan.me.uk Tor: 1800s) |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `60` | Machine heartbeat interval in seconds (0 = disabled) |
 | `CONSOLIDATE_ALERTS` | `false` | Batch IPs into fewer alerts per run (saves alert quota). With `SCENARIO_FORMAT=structured`, one alert per feed so per-feed confidence is kept |
 

@@ -170,6 +170,11 @@ class BlocklistSource:
     extract_field: Optional[int] = None  # Field index (0-based) to extract from lines
     field_separator: Optional[str] = " "
     rate_limited: Optional[bool] = False
+    # Published minimum fetch interval (seconds) for providers that cap how
+    # often their list may be downloaded (e.g. dan.me.uk's 30-minute Tor list
+    # rate limit). Daemon mode clamps its run interval up to the largest of
+    # these among enabled sources. None = no published minimum.
+    min_interval_seconds: Optional[int] = None
     api_key_name: Optional[str] = None
     get_headers: Callable = field(default=None)
     get_params: Callable = field(default=None)
@@ -209,10 +214,14 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
     # Spamhaus DROP
     BlocklistSource(
         name="Spamhaus DROP",
-        license="Spamhaus DROP terms",
-        attribution_required=True,
-        commercial_ok=True,
-        license_note="Free for any use including commercial; credit The Spamhaus Project and keep the date/copyright text with the data",
+        license="Spamhaus DROP Terms of Use",
+        attribution_required=False,
+        commercial_ok=None,
+        license_note=("Free of charge subject to the Spamhaus DROP Terms of Use "
+                      "(https://www.spamhaus.org/blocklists/drop-fair-use-policy/); "
+                      "the Terms grant no IP license (content is protected by copyright "
+                      "and database right) and prohibit using the Spamhaus name in "
+                      "marketing, promotional or other commercial materials"),
         url="https://www.spamhaus.org/drop/drop.txt",
         enabled_key="enable_spamhaus",
         comment_char=";",
@@ -381,6 +390,7 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://www.dan.me.uk/torlist/?exit",
         enabled_key="enable_tor",
         rate_limited=True,
+        min_interval_seconds=1800,
     ),
     # Scanners
     BlocklistSource(
@@ -3604,7 +3614,9 @@ Environment Variables:
   TELEMETRY_ENABLED        Set to false to disable telemetry
   METRICS_ENABLED          Set to false to disable Prometheus metrics (default: true)
   METRICS_PUSHGATEWAY_URL  Push URL for Prometheus metrics (default: localhost:9091)
-  INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0)
+  INTERVAL                 Daemon mode: seconds between runs (0=once, default: 0).
+                           Raised automatically to the largest published provider
+                           minimum among enabled feeds (e.g. dan.me.uk Tor: 1800s)
   RUN_ON_START             In daemon mode, run immediately on start (default: true)
   CROWDSEC_HEARTBEAT_INTERVAL  Machine heartbeat seconds (0=disabled, default: 60)
   WEBHOOK_URL              Webhook URL for notifications (Discord/Slack/generic)
@@ -3939,8 +3951,54 @@ def _start_heartbeat_loop(
     return thread, stop_event
 
 
+def provider_interval_floor_seconds(config: Config) -> tuple[int, list[str]]:
+    """Largest published minimum fetch interval among enabled built-in sources.
+
+    Providers that cap download frequency set
+    BlocklistSource.min_interval_seconds (e.g. dan.me.uk's Tor list:
+    30 minutes). Returns (floor_seconds, names of enabled sources that
+    publish a minimum). Mirrors run_import's enable/mode filtering, so
+    disabled or mode-excluded sources impose no floor.
+    """
+    floor = 0
+    names: list[str] = []
+    for source in BLOCKLIST_SOURCES:
+        if not source.min_interval_seconds:
+            continue
+        if not getattr(config, source.enabled_key, True):
+            continue
+        if config.mode != "all" and (source.rate_limited != (config.mode == "limited")):
+            continue
+        if not source.get_can_import(config):
+            continue
+        if source.min_interval_seconds > floor:
+            floor = source.min_interval_seconds
+        names.append(source.name)
+    return floor, names
+
+
+def apply_provider_interval_floor(config: Config, logger: logging.Logger) -> bool:
+    """Clamp the daemon interval up to enabled providers' published minimums.
+
+    A shorter INTERVAL would make the daemon fetch those sources more often
+    than their terms allow. Returns True when the interval was raised.
+    INTERVAL=0 (run once) is left untouched.
+    """
+    floor, names = provider_interval_floor_seconds(config)
+    if floor > 0 and 0 < config.interval < floor:
+        logger.warning(
+            f"INTERVAL={config.interval}s is shorter than the published minimum "
+            f"fetch interval of enabled source(s) {', '.join(names)} ({floor}s); "
+            f"clamping to {floor}s to respect provider rate limits"
+        )
+        config.interval = floor
+        return True
+    return False
+
+
 def _run_daemon(config: Config, logger: logging.Logger) -> int:
     """Run in daemon mode: repeat imports on a fixed interval."""
+    apply_provider_interval_floor(config, logger)
     shutdown = False
     heartbeat_thread, heartbeat_stop = _start_heartbeat_loop(config, logger)
 
@@ -3994,3 +4052,4 @@ def _run_daemon(config: Config, logger: logging.Logger) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
