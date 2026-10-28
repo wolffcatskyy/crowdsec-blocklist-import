@@ -4052,4 +4052,3 @@ def _run_daemon(config: Config, logger: logging.Logger) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
