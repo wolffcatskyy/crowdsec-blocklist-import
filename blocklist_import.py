@@ -313,15 +313,6 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         url="https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
         enabled_key="enable_abuse_ch",
     ),
-    BlocklistSource(
-        name="URLhaus",
-        license="abuse.ch community data (fair use)",
-        attribution_required=None,
-        commercial_ok=False,
-        license_note="Community feeds are free under fair use; commercial/for-profit use may require the paid abuse.ch commercial API",
-        url="https://urlhaus.abuse.ch/downloads/text_online/",
-        enabled_key="enable_abuse_ch",
-    ),
     # Other sources
     BlocklistSource(
         name="Emerging Threats",
@@ -586,7 +577,7 @@ PRESET_NAMES: tuple[str, ...] = ("embedded", "server", "max")
 
 _EMBEDDED_FEEDS: set[str] = {
     "enable_spamhaus",          # Spamhaus DROP
-    "enable_abuse_ch",          # Feodo Tracker + URLhaus
+    "enable_abuse_ch",          # Feodo Tracker
     "enable_emerging_threats",  # Emerging Threats compromised-ips
     "enable_ipsum",             # IPsum level 3+ and 4+
 }
@@ -681,7 +672,6 @@ FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
     "feodo-tracker": 95,
     "abuseipdb": 90,
     "abuseipdb-api": 90,
-    "urlhaus": 90,
     # 70-85: high-signal attack/C2 reports (ET compromised, FireHOL level 1,
     # CINS, DShield top attackers) and consensus lists (IPsum level 4+)
     "firehol-level1": 85,

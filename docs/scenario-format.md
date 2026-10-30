@@ -62,7 +62,7 @@ can also override per feed in its own config (`feed_scoring.feeds`).
 | Confidence | Feeds |
 |-----------|-------|
 | 95 | spamhaus-drop, feodo-tracker |
-| 90 | abuseipdb, abuseipdb-api, urlhaus |
+| 90 | abuseipdb, abuseipdb-api |
 | 85 | firehol-level1, ipsum-level4, emerging-threats, dshield |
 | 80 | cybercrime-tracker, dshield-top-attackers |
 | 75 | binary-defense, ci-army, firehol-level2 |
