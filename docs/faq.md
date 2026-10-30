@@ -331,7 +331,6 @@ CROWDSEC_LAPI_KEY=YOUR_LOCAL_BOUNCER_KEY
    - AlienVault OTX
    - Spamhaus
    - PhishTank
-   - URLhaus
    - Avoid: Generic "all bad IPs" lists
 
 4. **Monitor false positives:**

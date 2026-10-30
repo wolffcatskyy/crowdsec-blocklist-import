@@ -18,7 +18,7 @@ GROUP_META = {
     "ENABLE_SPAMHAUS":          ("Spamhaus",           "Known spam / hijacked netblocks (DROP)"),
     "ENABLE_BLOCKLIST_DE":      ("Blocklist.de",       "All/SSH/Apache/Mail attacker IPs"),
     "ENABLE_FIREHOL":           ("Firehol",            "Firehol level1-3 netsets"),
-    "ENABLE_ABUSE_CH":          ("Abuse.ch",           "Feodo Tracker + URLhaus malware feeds"),
+    "ENABLE_ABUSE_CH":          ("Abuse.ch",           "Feodo Tracker malware feed"),
     "ENABLE_EMERGING_THREATS":  ("Emerging Threats",   "Compromised IP list"),
     "ENABLE_BINARY_DEFENSE":    ("Binary Defense",     "Binary Defense ban list"),
     "ENABLE_BRUTEFORCE_BLOCKER":("Bruteforce Blocker", "Brute-force attacker IPs"),

@@ -2918,7 +2918,6 @@ class TestLicenseMetadata:
             by_name.setdefault(s.name, s)
         # feeds with explicit commercial restrictions must not read as OK
         assert by_name["Binary Defense"].commercial_ok is False
-        assert by_name["URLhaus"].commercial_ok is False
         assert by_name["DShield"].commercial_ok is False
 
     def test_list_sources_shows_license_and_presets(self, clean_env, caplog):
@@ -2946,8 +2945,16 @@ class TestConfidenceTiers:
             assert 20 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 30
 
     def test_curated_c2_in_90_95(self):
-        for slug in ("spamhaus-drop", "feodo-tracker", "urlhaus", "abuseipdb", "abuseipdb-api"):
+        for slug in ("spamhaus-drop", "feodo-tracker", "abuseipdb", "abuseipdb-api"):
             assert 90 <= bi.FEED_CONFIDENCE_DEFAULTS[slug] <= 95
+
+    def test_urlhaus_retired_no_source_or_confidence_remains(self):
+        """URLhaus bulk downloads return HTTP 410 (abuse.ch retired them);
+        no source, confidence entry, or abuse.ch URL may remain (#126)."""
+        for s in bi.BLOCKLIST_SOURCES:
+            assert "urlhaus" not in s.name.lower()
+            assert s.url is None or "urlhaus.abuse.ch" not in s.url
+        assert "urlhaus" not in bi.FEED_CONFIDENCE_DEFAULTS
 
     def test_high_signal_reports_in_70_85(self):
         for slug in ("firehol-level1", "emerging-threats", "ci-army", "dshield", "dshield-top-attackers"):

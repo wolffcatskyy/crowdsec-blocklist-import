@@ -185,7 +185,7 @@ Each blocklist source can be individually enabled or disabled. By default, block
 | ENABLE_FIREHOL_LEVEL1 | FireHOL level1 list (overrides ENABLE_FIREHOL) | `true` |
 | ENABLE_FIREHOL_LEVEL2 | FireHOL level2 list (overrides ENABLE_FIREHOL) | `true` |
 | ENABLE_FIREHOL_LEVEL3 | FireHOL level3 list (overrides ENABLE_FIREHOL) | `true` |
-| ENABLE_ABUSE_CH | Abuse.ch malware IP lists | `true` |
+| ENABLE_ABUSE_CH | Abuse.ch Feodo Tracker malware IP list (URLhaus was retired by abuse.ch; its bulk downloads return HTTP 410) | `true` |
 | ENABLE_EMERGING_THREATS | Emerging Threats ETopen IP reputation | `true` |
 | ENABLE_BINARY_DEFENSE | Binary Defense Systems threat feed | `true` |
 | ENABLE_BRUTEFORCE_BLOCKER | Bruteforce Blocker SSH/FTP attackers | `true` |

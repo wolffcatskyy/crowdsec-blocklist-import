@@ -292,7 +292,7 @@ Get a free API key at [abuseipdb.com](https://www.abuseipdb.com/). The free tier
 
 | Preset | Feeds | Use case |
 |--------|-------|----------|
-| `embedded` | Spamhaus DROP, abuse.ch (Feodo + URLhaus), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs and caps decisions at 15,000 by default (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
+| `embedded` | Spamhaus DROP, abuse.ch (Feodo Tracker), Emerging Threats, IPsum | UDM/UDR-class devices; stays around ~20K IPs and caps decisions at 15,000 by default (see [#21](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/21)) |
 | `server` | Everything except Firehol level3, VXVault, Tor, and dead feeds | Servers and VPSes; drops the feeds with false-positive history ([#26](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/26), [#38](https://github.com/wolffcatskyy/crowdsec-blocklist-import/issues/38)) |
 | `max` | Everything (the pre-v3.9 behavior) | Maximum coverage |
 
@@ -390,7 +390,7 @@ crowdsec-blocklist-import pulls from 32 threat intelligence sources:
 | **Spamhaus DROP** | Known hijacked networks | Network blocks |
 | **Blocklist.de** | SSH, web, mail attacks (all categories) | Attack vectors |
 | **Firehol Level 1/2/3** | Malware, C2, compromised hosts | Malware |
-| **Abuse.ch** | Feodo Tracker, URLhaus | Malware |
+| **Abuse.ch** | Feodo Tracker | Malware |
 | **Emerging Threats** | Compromised IP detection | Threats |
 | **Binary Defense** | Malware, DoS, botnet IPs | Malware |
 | **Bruteforce Blocker** | SSH/RDP brute force attacks | Attacks |

@@ -177,7 +177,6 @@ show_source_overrides() {
         "Firehol level1"
         "Firehol level2"
         "Feodo Tracker"
-        "URLhaus"
         "Emerging Threats"
         "Binary Defense"
         "Bruteforce Blocker"
@@ -864,10 +863,6 @@ main() {
         "feodo.txt" \
         "grep -v '^#'"
 
-    fetch_list "URLhaus" \
-        "https://urlhaus.abuse.ch/downloads/text_online/" \
-        "urlhaus.txt" \
-        "grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}'"
 
     # Other sources
     fetch_list "Emerging Threats" \
@@ -1160,7 +1155,6 @@ list_sources() {
         "Firehol level1"
         "Firehol level2"
         "Feodo Tracker"
-        "URLhaus"
         "Emerging Threats"
         "Binary Defense"
         "Bruteforce Blocker"
