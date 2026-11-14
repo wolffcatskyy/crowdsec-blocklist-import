@@ -382,7 +382,7 @@ For v4.0 readiness, choose `PRESET=server`, `max`, or `embedded` explicitly for 
 
 ## Supported Blocklists
 
-crowdsec-blocklist-import pulls from 32 threat intelligence sources:
+crowdsec-blocklist-import pulls from 33 threat intelligence sources:
 
 | Source | Purpose | Type |
 |--------|---------|------|
@@ -405,6 +405,7 @@ crowdsec-blocklist-import pulls from 32 threat intelligence sources:
 | **Sentinel** | Turris greylist (community-sourced threat intelligence) | Threats |
 | **Data-Shield IPv4** | Curated malicious IPv4 registry (duggytuxy; opt-in, off by default) | Threats |
 | **Avastel proxy bot IPs** | Daily proxy-infrastructure blocklist, provider confidence-filtered (antoinevastel; opt-in, off by default) | Proxies |
+| **OffSeq Mirage** | Multi-sensor honeypot attacker IPs, rebuilt daily (CC BY 4.0; opt-in, off by default) | Threats |
 | **Tor Exit Nodes** | Tor network exit points | Privacy |
 | **Scanner IPs** | Shodan, Censys, Internet scanners | Scanners |
 

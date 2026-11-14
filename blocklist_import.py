@@ -474,6 +474,19 @@ BLOCKLIST_SOURCES: list[BlocklistSource] = [
         field_separator=";",
         line_filter=avastel_line_keep,
     ),
+    # OffSeq Mirage community feed - opt-in per issue #130: honeypot
+    # attackers seen by 3+ sensors in 2+ networks within 7 days, expiring
+    # 7 days after last activity; VPN/Tor exits and research scanners are
+    # excluded upstream. Rebuilt daily.
+    BlocklistSource(
+        name="OffSeq Mirage",
+        license="CC-BY-4.0",
+        attribution_required=True,
+        commercial_ok=True,
+        license_note="CC BY 4.0 honeypot data; credit \"OffSeq Mirage\" with a link to https://feeds.offseq.com on redistribution",
+        url="https://feeds.offseq.com/mirage-feed/latest/ipv4-7d.txt",
+        enabled_key="enable_offseq_mirage",
+    ),
     # VXVault Malware (FireHOL mirror)
     BlocklistSource(
         name="VXVault",
@@ -603,6 +616,7 @@ _ALWAYS_OFF_FEEDS: set[str] = {
 _OPT_IN_FEEDS: set[str] = {
     "enable_data_shield",       # Data-Shield IPv4 (duggytuxy)
     "enable_avastel",           # Avastel proxy bot IPs (antoinevastel)
+    "enable_offseq_mirage",     # OffSeq Mirage community feed
 }
 
 
@@ -692,6 +706,7 @@ FEED_CONFIDENCE_DEFAULTS: dict[str, int] = {
     "sentinel": 65,
     "data-shield-ipv4": 65,
     "avastel-proxy-bot-ips": 50,
+    "offseq-mirage": 65,
     "bruteforce-blocker": 65,
     "blocklist-de-all": 60,
     "blocklist-de-apache": 55,
@@ -1198,9 +1213,9 @@ class Config:
     # Exit non-zero when any enabled feed fails to fetch (default: false)
     fail_on_dead_feed: bool = False
 
-    # Blocklist enables (all enabled by default except enable_data_shield
-    # and enable_avastel, explicit opt-in feeds that stay off unless their
-    # ENABLE_* var is set true)
+    # Blocklist enables (all enabled by default except enable_data_shield,
+    # enable_avastel and enable_offseq_mirage, explicit opt-in feeds that
+    # stay off unless their ENABLE_* var is set true)
     enable_ipsum: bool = True
     enable_spamhaus: bool = True
     enable_blocklist_de: bool = True
@@ -1225,6 +1240,7 @@ class Config:
     enable_sentinel: bool = True
     enable_data_shield: bool = False
     enable_avastel: bool = False
+    enable_offseq_mirage: bool = False
 
     @classmethod
     def from_env(cls) -> Config:
@@ -1369,7 +1385,8 @@ class Config:
             enable_vxvault=get_bool("ENABLE_VXVAULT", feed_default("enable_vxvault")),
             enable_sentinel=get_bool("ENABLE_SENTINEL", feed_default("enable_sentinel")),
             enable_data_shield=get_bool("ENABLE_DATA_SHIELD", feed_default("enable_data_shield")),
-            enable_avastel=get_bool("ENABLE_AVASTEL", feed_default("enable_avastel"))
+            enable_avastel=get_bool("ENABLE_AVASTEL", feed_default("enable_avastel")),
+            enable_offseq_mirage=get_bool("ENABLE_OFFSEQ_MIRAGE", feed_default("enable_offseq_mirage"))
         )
 
 
