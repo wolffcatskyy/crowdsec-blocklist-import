@@ -2825,6 +2825,61 @@ class TestAvastelOptIn:
 
 
 # ===========================================================================
+# 13d. OffSeq Mirage: explicit opt-in feed (issue #130)
+# ===========================================================================
+
+
+class TestOffSeqMirageOptIn:
+    """OffSeq Mirage is disabled by default everywhere; only an explicit
+    ENABLE_OFFSEQ_MIRAGE=true turns it on."""
+
+    def _source(self):
+        matches = [s for s in bi.BLOCKLIST_SOURCES if s.name == "OffSeq Mirage"]
+        assert len(matches) == 1
+        return matches[0]
+
+    def test_source_registered(self):
+        src = self._source()
+        assert src.enabled_key == "enable_offseq_mirage"
+        assert src.url == "https://feeds.offseq.com/mirage-feed/latest/ipv4-7d.txt"
+        assert src.license == "CC-BY-4.0"
+        assert src.attribution_required is True
+        assert "ENABLE_OFFSEQ_MIRAGE" in VALID_ENABLE_VARS
+
+    def test_off_under_legacy_default(self, clean_env):
+        assert Config.from_env().enable_offseq_mirage is False
+
+    def test_off_under_opt_in_mode(self, clean_env, monkeypatch):
+        monkeypatch.setenv("BLOCKLISTS_OPT_IN", "true")
+        assert Config.from_env().enable_offseq_mirage is False
+
+    @pytest.mark.parametrize("preset", ["embedded", "server", "max"])
+    def test_off_under_every_preset(self, clean_env, monkeypatch, preset):
+        monkeypatch.setenv("PRESET", preset)
+        assert Config.from_env().enable_offseq_mirage is False
+
+    def test_explicit_enable_turns_on(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRESET", "embedded")
+        monkeypatch.setenv("ENABLE_OFFSEQ_MIRAGE", "true")
+        assert Config.from_env().enable_offseq_mirage is True
+
+    def test_no_preset_membership(self):
+        assert bi.presets_for_key("enable_offseq_mirage") == []
+
+    def test_confidence_default(self):
+        assert bi.feed_slug("OffSeq Mirage") == "offseq-mirage"
+        assert bi.feed_confidence("OffSeq Mirage") == 65
+
+    def test_plain_list_parsed(self):
+        src = self._source()
+        errors = {}
+        out = []
+        for line in ["2.57.121.25", "", "198.51.100.7"]:
+            out.extend(bi.extract_ips_from_line(line, errors, src))
+        assert out == ["2.57.121.25", "198.51.100.7"]
+
+
+# ===========================================================================
 # 16. Zero-feed guardrail + FAIL_ON_DEAD_FEED (v3.9)
 # ===========================================================================
 
